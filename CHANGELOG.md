@@ -2,6 +2,14 @@
 
 本文件记录 heybox-operator（二次开发自 [HannJia/xiaoheihe-operator](https://github.com/HannJia/xiaoheihe-operator)）的变更，按时间倒序。
 
+## 2026-11-08（0.11.0：接入宿主 Replyer 生成）
+
+- 新增 `host_replyer.py`：通过 `chat.open_session` 创建（或复用）`xiaoheihe-operator:<profile>` 聊天流，再调用宿主能力 `maisaka.reply.generate`，复用 MaiBot 的**人格、记忆、表达选择与 Hook** 生成文本。
+- `_manifest.json` 声明新能力：`chat.open_session`、`maisaka.reply.generate`。
+- 新增配置「使用宿主 Replyer 生成」（`use_host_replyer`，默认开启）；评论、私信、日常发帖、浏览总结都优先走宿主 Replyer。
+- 宿主缺少能力、会话创建失败或 Replyer 报错时，自动回退到插件自己的 `ctx.llm.generate`，不影响原有功能。
+- 测试：新增 `tests/test_host_replyer.py`（7 个），全量 131 个通过。
+
 ## 2026-11-08（0.10.0：浏览总结发帖）
 
 - 移植 `SengokuCola/xiaoheihe_adapter` 的浏览总结思路：

@@ -10,7 +10,7 @@
    - `interval`：距上一批开始 ≥ `summary_interval_hours`（默认 24）；
    - `either`：两者先到先发。
    有未完成的批次时不会开新批次。
-3. **生成**：`content_generator.digest()` 取最多 100 帖、约 2400 字素材，要求输出 `{"title","paragraphs"}`，正文 200–400 字、2–4 段。
+3. **生成**：`content_generator.digest()` 取最多 100 帖、约 2400 字素材，要求输出 `{"title","paragraphs"}`，正文 200–400 字、2–4 段；优先走宿主 Replyer（人格/记忆/Hook），失败回退插件模型。
 4. **发布**：每段作为独立 `text` block 发到「发帖社区」；读回核对标题与段落拼接后的正文。
 5. **状态**：`generating → ready → sending → sent`；失败分 `error`（生成/配置问题）、`failed`（平台明确拒绝）、`unknown`（发送结果不明）。
 

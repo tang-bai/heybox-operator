@@ -255,6 +255,7 @@ try:
     from .context_provider import PersonaContextProvider
     from .dm_store import DirectMessageStore
     from .emoji_catalog import normalize_outgoing_text
+    from .host_replyer import HostReplyer
     from .models import IncomingEvent, OutgoingAction, OutgoingStatus
     from .policy import content_fingerprint, is_publishable, normalize_text
     from .qr_generator import qr_data_url
@@ -268,6 +269,7 @@ except ImportError:  # pragma: no cover - direct Runner fallback
     from context_provider import PersonaContextProvider
     from dm_store import DirectMessageStore
     from emoji_catalog import normalize_outgoing_text
+    from host_replyer import HostReplyer
     from models import IncomingEvent, OutgoingAction, OutgoingStatus
     from policy import content_fingerprint, is_publishable, normalize_text
     from qr_generator import qr_data_url
@@ -550,8 +552,14 @@ class XiaoheiheContentSection(PluginConfigBase):
     )
     post_summarize_feed: bool = _ui_field(
         label="发帖总结今天刷到的帖子",
-        hint="开启后发帖会读取今天逛过的帖子（不够时临时拉一次推荐流），让模型总结并挑一两篇评论；关闭则只按人设和生活轨迹生成。标题只作为素材，不会照抄。",
+        hint="旧版简版总结；开启「浏览总结发帖」后不再使用。",
         order=7,
+        default=True,
+    )
+    use_host_replyer: bool = _ui_field(
+        label="使用宿主 Replyer 生成",
+        hint="开启后评论、私信、发帖和浏览总结都走 MaiBot 的 Replyer（人格、记忆、Hook）；宿主缺少 maisaka.reply.generate 能力时自动回退到插件自己的模型。",
+        order=8,
         default=True,
     )
 
@@ -775,6 +783,10 @@ class XiaoheiheConfig(PluginConfigBase):
         return bool(self.content.post_summarize_feed)
 
     @property
+    def use_host_replyer(self) -> bool:
+        return bool(self.content.use_host_replyer)
+
+    @property
     def summary_enabled(self) -> bool:
         return bool(self.automation.summary_enabled)
 
@@ -859,6 +871,7 @@ class XiaoheiheOperatorPlugin(MaiBotPlugin):
         self._image_gen: DirectImageGenerator | None = None
         self._runtime: XiaoheiheRuntime | None = None
         self._generator: ContentGenerator | None = None
+        self._host_replyer: HostReplyer | None = None
         self._persona: PersonaContextProvider | None = None
         self._worker: asyncio.Task[None] | None = None
         self._stop = asyncio.Event()
@@ -1019,7 +1032,22 @@ class XiaoheiheOperatorPlugin(MaiBotPlugin):
             life_api_name=str(self.config.life_context_api),
             identity_api_name=str(self.config.identity_reference_api),
         )
-        self._generator = ContentGenerator(self.ctx.llm, persona=self._persona_identity)
+        self._host_replyer = HostReplyer(
+            self.ctx,
+            profile_id=str(self.config.profile_id),
+            account_id=str(self._runtime.credentials.uid)
+            if self._runtime.credentials
+            else "",
+        )
+        self._generator = ContentGenerator(
+            self.ctx.llm,
+            persona=self._persona_identity,
+            writer=self._host_writer if self.config.use_host_replyer else None,
+        )
+        self.ctx.logger.info(
+            "小黑盒生成链路：%s",
+            "宿主 Replyer（人格/记忆/Hook）" if self.config.use_host_replyer else "插件模型",
+        )
         # 重启后不立刻去逛，过一会儿再打开，避免每次重启都在同一时刻出现一轮动作。
         self._next_feed_at = time.time() + self._rng.uniform(120, 900)
         if self._image_gen is not None:
@@ -1104,6 +1132,22 @@ class XiaoheiheOperatorPlugin(MaiBotPlugin):
         if callable(log):
             log(message, *args)
 
+    async def _host_writer(self, reference: str, format_instruction: str) -> str:
+        """ContentGenerator 的宿主 Replyer 出口；失败时抛出，由它回退到本地模型。"""
+
+        if self._host_replyer is None:
+            raise RuntimeError("宿主 Replyer 未初始化")
+        try:
+            return await self._host_replyer.generate(
+                reference=reference,
+                format_instruction=format_instruction,
+            )
+        except Exception as exc:  # noqa: BLE001
+            self.ctx.logger.warning(
+                "宿主 Replyer 不可用，本次回退到插件模型：%s", type(exc).__name__
+            )
+            raise
+
     async def _persona_identity(self) -> str:
         """生成内容用的人设：插件里单独填写的优先，否则跟随宿主 MaiBot 的昵称和人格。"""
 
@@ -1147,6 +1191,12 @@ class XiaoheiheOperatorPlugin(MaiBotPlugin):
         if scope != "self":
             return
         self.ctx.logger.info("小黑盒运营插件配置已更新：version=%s", version)
+        if self._persona is not None:
+            self._generator = ContentGenerator(
+                self.ctx.llm,
+                persona=self._persona_identity,
+                writer=self._host_writer if self.config.use_host_replyer else None,
+            )
         manual_cookie = str(self.config.manual_cookie or "").strip()
         if manual_cookie and manual_cookie != self._manual_cookie_applied:
             await self._apply_manual_cookie(manual_cookie)

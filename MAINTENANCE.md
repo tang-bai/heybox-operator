@@ -79,10 +79,17 @@
 - **命令**：`/xhh_summary`、`/xhh_summary_now`、`/xhh_summary_retry`、`/xhh_summary_skip`；仪表盘新增「浏览总结」卡片。
 - 开启总结后 `_proactive_once()` 不再执行按天的 `_create_proactive_post()`，避免两条发帖路径打架。
 - 验证：`tests/test_digest.py`（7 个）。
+### 10. 接入宿主 Replyer（0.11.0）
+
+- `host_replyer.py`：`ensure_stream()` 用 `ctx.chat.open_session(platform="xiaoheihe", chat_type="group", group_id=f"xiaoheihe-operator:{profile}")` 建流并缓存；`generate()` 调用 `ctx.call_capability("maisaka.reply.generate", stream_id=..., reference=..., format_instruction=...)`。
+- `ContentGenerator` 新增 `writer` 参数；评论、私信、日常发帖、总结四个出口都优先用宿主文本，失败回退 `llm.generate`。
+- 配置 `use_host_replyer` 默认开，`on_config_update` 会重建 generator 以切换链路。
+- 能力声明在 `_manifest.json`：`chat.open_session`、`maisaka.reply.generate`；旧宿主缺少能力时日志会出现「宿主 Replyer 不可用，本次回退到插件模型」。
+- 验证：`tests/test_host_replyer.py`（7 个）。
 ## 二、怎么验证
 
 ```powershell
-# 124 个用例（stdlib unittest，无需装依赖）
+# 131 个用例（stdlib unittest，无需装依赖）
 cd tests
 $env:PYTHONPATH = "<插件目录>;<插件目录>\tests"
 python -m unittest discover -s . -p "test_*.py"
@@ -91,7 +98,7 @@ python -m unittest discover -s . -p "test_*.py"
 python -m compileall -q .
 ```
 
-当前结果：`Ran 124 tests ... OK`。
+当前结果：`Ran 131 tests ... OK`。
 
 真机验收建议：
 
