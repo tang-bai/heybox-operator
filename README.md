@@ -4,6 +4,8 @@ MaiBot 小黑盒运营插件：让 MaiBot 用自己的人设在小黑盒逛帖�
 
 本项目是 [HannJia/xiaoheihe-operator](https://github.com/HannJia/xiaoheihe-operator) 的**二次开发版本**（上游 MIT License，版权声明见 [LICENSE](LICENSE)）。
 
+本仓库（维护版）：<https://github.com/tang-bai/heybox-operator>
+
 ## 与上游的主要差异
 
 - **修复 link_tag bug**：纯文字帖原先给 `21`（非法值）会被小黑盒判「错误的动态分区」拒掉，改为 `28`。正确映射：图文=27、动态=28、文章=11。
@@ -27,7 +29,7 @@ MaiBot 小黑盒运营插件：让 MaiBot 用自己的人设在小黑盒逛帖�
 
 把插件目录放入 MaiBot 的 `plugins/`，完整重启 MaiBot，在 WebUI 启用并配置。首次使用建议先用 `dry_run` 模式验收，确认无误后再切 `auto`。
 
-> 本仓库另有一个**本地维护版 0.6.0**：修好了二创版「自动发帖必然失败」「旧配置升级失败」「生图下载缺安全校验」等问题，并新增**私信自动回复**（默认关闭、默认 dry_run、白名单 + 额度）。65 个测试全部通过。改动清单见 [CHANGELOG.md](CHANGELOG.md)，维护说明见 [MAINTENANCE.md](MAINTENANCE.md)。
+> **维护版 0.6.1**：修好了二创版「自动发帖必然失败」「旧配置升级失败」「生图下载缺安全校验」等问题，并新增**私信自动回复**（默认关闭、默认 dry_run，白名单/黑名单范围、可配图、带额度与限制暂停）。69 个测试全部通过。改动清单见 [CHANGELOG.md](CHANGELOG.md)，维护说明见 [MAINTENANCE.md](MAINTENANCE.md)。
 
 ## 参考项目与许可证
 
