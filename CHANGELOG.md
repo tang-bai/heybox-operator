@@ -2,6 +2,11 @@
 
 本文件记录 heybox-operator（二次开发自 [HannJia/xiaoheihe-operator](https://github.com/HannJia/xiaoheihe-operator)）的变更，按时间倒序。
 
+## 2026-11-08（0.14.1：显示名改为「刷小黑盒」）
+
+- `_manifest.json` 的 `name` 从「小黑盒运营」改为「刷小黑盒」，插件中心与 WebUI 插件列表按新名字展示；`id`、仓库地址、功能均不变。
+- 版本升到 `0.14.1` 并发布对应 Release；WebUI 工作区标题仍为「小黑盒运营」，如需统一可再改 `webui.json` 的 `workspace_title`。
+
 ## 2026-11-08（0.14.0：按插件中心规范调整身份）
 
 - `_manifest.json` 的 `id` 从上游的 `org.orge-8.xiaoheihe-operator` 改为 `github.tang-bai.heybox-operator`，避免与上游插件在插件中心冲突。

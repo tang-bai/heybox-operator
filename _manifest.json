@@ -1,8 +1,8 @@
 {
   "manifest_version": 2,
   "id": "github.tang-bai.heybox-operator",
-  "version": "0.14.0",
-  "name": "小黑盒运营",
+  "version": "0.14.1",
+  "name": "刷小黑盒",
   "description": "MaiBot 小黑盒社区运营插件：扫码/Cookie 登录、人设逛帖点赞评论、私信自动回复、浏览总结发帖与 WebUI 仪表盘。",
   "author": {
     "name": "tang-bai",
