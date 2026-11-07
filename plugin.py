@@ -2395,6 +2395,7 @@ class XiaoheiheOperatorPlugin(MaiBotPlugin):
             )
             return
         external_send_started = False
+        link_id = ""
         stage = "prepare"
         try:
             blocks: list[dict[str, str]] = [{"type": "text", "text": body}]
@@ -2472,6 +2473,9 @@ class XiaoheiheOperatorPlugin(MaiBotPlugin):
             if not link_id:
                 self._store.update_outgoing(action_key, OutgoingStatus.SEND_UNKNOWN, error="missing_link_id")
                 return
+            # Keep the id both in the row and in metadata: if the readback
+            # below fails, reconciliation can still verify this post later.
+            self._store.merge_outgoing_metadata(action_key, {"link_id": link_id})
             context = await client.fetch_thread_context(link_id)
             if context and _same_post_content(
                 title,
@@ -2484,19 +2488,38 @@ class XiaoheiheOperatorPlugin(MaiBotPlugin):
                 self._store.update_outgoing(action_key, OutgoingStatus.SEND_UNKNOWN, external_id=link_id, error="readback_not_found")
         except Exception as exc:  # noqa: BLE001
             category = str(getattr(exc, "category", ""))
-            if not external_send_started:
+            label = _error_label(exc)
+            if link_id:
+                # create_post already returned an id, so the post exists (or may
+                # exist); only the readback failed. Keep the id for reconcile.
+                status = OutgoingStatus.SEND_UNKNOWN
+                error = f"readback:{stage}:{label}"
+                self._store.update_outgoing(
+                    action_key, status, external_id=link_id, error=error
+                )
+                self._store.merge_outgoing_metadata(action_key, {"link_id": link_id})
+            elif not external_send_started:
                 status = OutgoingStatus.FAILED
-                error = f"pre_send:{stage}:{type(exc).__name__}"
+                error = f"pre_send:{stage}:{label}"
+                self._store.update_outgoing(action_key, status, error=error)
             else:
-                status = OutgoingStatus.FAILED if category in {"credential_invalid", "forbidden", "rate_limited"} else OutgoingStatus.SEND_UNKNOWN
-                error = type(exc).__name__
-            self._store.update_outgoing(action_key, status, error=error)
+                rejected = category in {
+                    "upstream_rejected",
+                    "credential_invalid",
+                    "forbidden",
+                    "rate_limited",
+                    "http",
+                    "response_shape",
+                }
+                status = OutgoingStatus.FAILED if rejected else OutgoingStatus.SEND_UNKNOWN
+                error = f"create_post:{label}"
+                self._store.update_outgoing(action_key, status, error=error)
             self.ctx.logger.error(
-                "小黑盒主动发帖失败或结果未知：stage=%s error=%s category=%s status=%s detail=%s",
+                "小黑盒主动发帖失败或结果未知：stage=%s label=%s category=%s status=%s detail=%s",
                 stage,
-                type(exc).__name__,
-                str(getattr(exc, "category", "")),
-                str(getattr(exc, "status_code", "")),
+                label,
+                category,
+                status,
                 str(exc)[:180],
             )
 

@@ -73,7 +73,7 @@
 ## 二、怎么验证
 
 ```powershell
-# 111 个用例（stdlib unittest，无需装依赖）
+# 115 个用例（stdlib unittest，无需装依赖）
 cd tests
 $env:PYTHONPATH = "<插件目录>;<插件目录>\tests"
 python -m unittest discover -s . -p "test_*.py"
@@ -82,7 +82,7 @@ python -m unittest discover -s . -p "test_*.py"
 python -m compileall -q .
 ```
 
-当前结果：`Ran 111 tests ... OK`。
+当前结果：`Ran 115 tests ... OK`。
 
 真机验收建议：
 

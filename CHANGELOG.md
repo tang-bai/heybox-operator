@@ -2,6 +2,15 @@
 
 本文件记录 heybox-operator（二次开发自 [HannJia/xiaoheihe-operator](https://github.com/HannJia/xiaoheihe-operator)）的变更，按时间倒序。
 
+## 2026-11-08（0.9.4：主动发帖错误分类与 link_id 保留）
+
+- **错误标签细化**：`proactive_post` 不再只记 `XiaoheiheApiError`，而是写出阶段与分类：
+  - `create_post:<category>:<message>` —— 发帖请求阶段被拒/失败；
+  - `readback:<stage>:<category>:<message>` —— 发帖已返回 `link_id`，但读回失败。
+- **保留 link_id**：`create_post` 返回后立即把 id 写进 `external_id` 和 metadata；读回异常时不再丢失，`_reconcile_unknowns()` 后续可以按 id 核验并转 `verified`。
+- **分类更准确**：`upstream_rejected / credential_invalid / forbidden / rate_limited / http / response_shape` 记为 `failed`（发帖未成功），超时/服务端异常仍记 `send_unknown`。
+- 测试：新增 `tests/test_post_errors.py`（4 个），全量 115 个通过。
+
 ## 2026-11-08（0.9.3：修复评论读回误报 readback_not_found）
 
 - **修复楼中楼核验**：读回时递归展开 `comments/children/sub_comments/replies` 等嵌套结构，楼中楼回复不再因为「只在子楼层」而判成 `send_unknown`。
