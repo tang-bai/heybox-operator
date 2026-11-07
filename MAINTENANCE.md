@@ -127,7 +127,7 @@ python -m compileall -q .
 
 | 项 | 说明 |
 |---|---|
-| `_manifest.json` 身份 | 0.6.1 起 `author` / `urls.repository` 已改为本仓库（`tang-bai/heybox-operator`）；`id` 仍是 `org.orge-8.xiaoheihe-operator`，刻意不改，避免已有配置被当成新插件丢掉。 |
+| `_manifest.json` 身份 | 0.14.0 起按插件中心规范改为 `github.tang-bai.heybox-operator`（原 `org.orge-8.xiaoheihe-operator` 是上游 ID，会冲突）；已装旧版需要重新配置一次。 |
 | 默认开箱即运营 | `enabled=true`、`mode="auto"`，扫码后默认会点赞（3/天）和回评论（1/天）；自动发帖因为社区默认留空而不会触发。想绝对安静就先改 `dry_run`。 |
 | 凭证存储 | `credentials/*.json` 明文保存 cookie/token，只有 POSIX 上 `chmod 600`；Windows 无额外保护。 |
 | 推荐流字段依赖 | 互动筛选依赖 `section_names / community_id / topic_id`，线上推荐流若不带社区名，白名单永远命中不了，会「只逛不互动」。 |

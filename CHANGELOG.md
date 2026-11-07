@@ -2,6 +2,13 @@
 
 本文件记录 heybox-operator（二次开发自 [HannJia/xiaoheihe-operator](https://github.com/HannJia/xiaoheihe-operator)）的变更，按时间倒序。
 
+## 2026-11-08（0.14.0：按插件中心规范调整身份）
+
+- `_manifest.json` 的 `id` 从上游的 `org.orge-8.xiaoheihe-operator` 改为 `github.tang-bai.heybox-operator`，避免与上游插件在插件中心冲突。
+- 补齐 `urls`（homepage / documentation / issues）、`i18n.supported_locales`；`display` 图标保留本地 `assets/icon.png`。
+- 版本号按三段式发布 `0.14.0`，并创建对应 GitHub Release 供插件中心校验。
+- 注意：更换 ID 后，已安装旧版的用户会被当成新插件，需要重新配置一次。
+
 ## 2026-11-08（0.13.0：发帖表单改为网页端最小字段集）
 
 - `create_post()` 只提交网页端实测通过的字段：`title / desc / post_type / text / link_tag / topic_ids / hashtags`；去掉 `original / declaration / extra_declaration / words_count / view_limit`（只有存草稿时才带 `draft` + `view_limit`）。这些多余字段会被判「错误的动态分区」或参数错误。
