@@ -2,6 +2,18 @@
 
 本文件记录 heybox-operator（二次开发自 [HannJia/xiaoheihe-operator](https://github.com/HannJia/xiaoheihe-operator)）的变更，按时间倒序。
 
+## 2026-11-08（0.10.0：浏览总结发帖）
+
+- 移植 `SengokuCola/xiaoheihe_adapter` 的浏览总结思路：
+  - 素材 = 浏览时实际点开的帖子（标题/摘要/社区，按帖子去重）+ 自己在该帖下**已成功发送**的评论；
+  - 按「每 N 帖 / 每 N 小时 / 先到先发」触发，攒够一批才生成；
+  - 一次生成 200–400 字、2–4 段的浏览感想，每段作为独立正文块发布成一篇帖子；
+  - 状态机 `generating → ready → sending → sent`，失败分 `error / failed / unknown`，`unknown` 不自动重发。
+- 新增 `digest_reads` / `digest_runs` 表；开启总结后暂停按天的自动发帖（`posts_per_day` 不再限制总结帖）。
+- 新增命令：`/xhh_summary`（状态）、`/xhh_summary_now`（立即总结）、`/xhh_summary_retry`（重试失败）、`/xhh_summary_skip`（跳过本轮）。
+- 仪表盘新增「浏览总结」卡片（开关、触发方式、待总结帖数、最近状态与 link_id）。
+- 测试：新增 `tests/test_digest.py`（7 个），全量 124 个通过。
+
 ## 2026-11-08（0.9.6：修复发帖读回只拿到评论的问题）
 
 - **帖子树请求补全网页端参数**：`fetch_thread_context()` 现在发送 `is_first=1`、`page/index/limit`、`sort_filter=time`、`owner_only=0`。短请求（只有 `link_id`）可能只返回评论、不带帖子正文，导致发帖读回误判 `readback_not_found`。

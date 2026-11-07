@@ -66,6 +66,10 @@
         <h2>私信</h2>
         <div class="kv" id="dm"></div>
       </div>
+      <div class="card">
+        <h2>浏览总结</h2>
+        <div class="kv" id="summary"></div>
+      </div>
     </section>
 
     <section class="card">
@@ -87,6 +91,7 @@
     const quotasNode = document.querySelector('#quotas');
     const queueNode = document.querySelector('#queue');
     const dmNode = document.querySelector('#dm');
+    const summaryNode = document.querySelector('#summary');
     const recentNode = document.querySelector('#recent');
     const subtitleNode = document.querySelector('#subtitle');
     const statusNode = document.querySelector('#statusline');
@@ -164,6 +169,21 @@
       kv(dmNode, '暂停剩余', dm.paused_remaining_seconds ? String(dm.paused_remaining_seconds) + ' 秒' : '无');
     }
 
+    function renderSummary(data) {
+      const summary = data.summary || {};
+      summaryNode.replaceChildren();
+      kv(summaryNode, '开关', summary.enabled ? '开启' : '关闭');
+      let trigger = '每 ' + String(summary.every_posts || 0) + ' 帖';
+      if (summary.trigger === 'interval') trigger = '每 ' + String(summary.interval_hours || 0) + ' 小时';
+      if (summary.trigger === 'either') trigger = '每 ' + String(summary.every_posts || 0) + ' 帖或 ' + String(summary.interval_hours || 0) + ' 小时';
+      kv(summaryNode, '触发', trigger);
+      kv(summaryNode, '待总结', String(summary.pending || 0) + ' 帖');
+      kv(summaryNode, '最近状态', summary.state || '-');
+      kv(summaryNode, 'link_id', summary.link_id || '-');
+      if (summary.title) kv(summaryNode, '最近标题', summary.title);
+      if (summary.error) kv(summaryNode, '错误', summary.error);
+    }
+
     function renderRecent(data) {
       const rows = Array.isArray(data.recent) ? data.recent : [];
       recentNode.replaceChildren();
@@ -200,6 +220,7 @@
       renderQuotas(data);
       renderQueue(data);
       renderDm(data);
+      renderSummary(data);
       renderRecent(data);
     }
 

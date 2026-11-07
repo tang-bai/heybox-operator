@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import sqlite3
 import time
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -69,6 +70,24 @@ class OperatorStore:
                 seen_at REAL NOT NULL
             );
             CREATE INDEX IF NOT EXISTS idx_seen_posts_seen ON seen_posts(seen_at DESC);
+            CREATE TABLE IF NOT EXISTS digest_reads (
+                post_id TEXT PRIMARY KEY,
+                title TEXT NOT NULL,
+                excerpt TEXT NOT NULL DEFAULT '',
+                community TEXT NOT NULL DEFAULT '',
+                created_at REAL NOT NULL,
+                batch TEXT NOT NULL DEFAULT ''
+            );
+            CREATE INDEX IF NOT EXISTS idx_digest_pending ON digest_reads(batch, created_at);
+            CREATE TABLE IF NOT EXISTS digest_runs (
+                id TEXT PRIMARY KEY,
+                created_at REAL NOT NULL,
+                state TEXT NOT NULL,
+                topic TEXT NOT NULL DEFAULT '',
+                draft_json TEXT NOT NULL DEFAULT '',
+                link_id TEXT NOT NULL DEFAULT '',
+                error TEXT NOT NULL DEFAULT ''
+            );
             """
         )
         columns = {str(row[1]) for row in self._conn.execute("PRAGMA table_info(incoming_events)")}
@@ -421,6 +440,164 @@ class OperatorStore:
             (float(since), max(1, min(int(limit), 50))),
         ).fetchall()
         return [dict(row) for row in rows]
+
+    def record_digest_material(
+        self,
+        post_id: str,
+        *,
+        title: str,
+        excerpt: str = "",
+        community: str = "",
+    ) -> bool:
+        """Accumulate one browsed post for the summary post (dedup by post)."""
+
+        safe_id = str(post_id or "").strip()
+        safe_title = str(title or "").strip()
+        if not safe_id or not safe_title:
+            return False
+        cursor = self._conn.execute(
+            """
+            INSERT OR IGNORE INTO digest_reads(post_id, title, excerpt, community, created_at)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (safe_id, safe_title[:120], str(excerpt or "")[:300], str(community or "")[:60], time.time()),
+        )
+        self._conn.commit()
+        return cursor.rowcount > 0
+
+    def count_digest_pending(self) -> int:
+        row = self._conn.execute(
+            "SELECT COUNT(*) AS count FROM digest_reads WHERE batch=''"
+        ).fetchone()
+        return int(row["count"] if row else 0)
+
+    def claim_digest(
+        self,
+        *,
+        trigger: str,
+        every_posts: int,
+        interval_hours: int,
+        topic: str = "",
+        force: bool = False,
+    ) -> str:
+        """Claim one batch of materials when the configured trigger is due."""
+
+        now = time.time()
+        try:
+            self._conn.execute("BEGIN IMMEDIATE")
+        except sqlite3.OperationalError:
+            # A pending implicit transaction on the shared connection.
+            self._conn.commit()
+            self._conn.execute("BEGIN IMMEDIATE")
+        try:
+            latest = self._conn.execute(
+                "SELECT state, created_at FROM digest_runs ORDER BY created_at DESC, rowid DESC LIMIT 1"
+            ).fetchone()
+            if latest is not None and str(latest["state"]) not in {"sent", "discarded"}:
+                self._conn.rollback()
+                return ""
+            row = self._conn.execute(
+                "SELECT COUNT(*) AS count, MIN(created_at) AS first_at FROM digest_reads WHERE batch=''"
+            ).fetchone()
+            count = int(row["count"] if row else 0)
+            first_at = float(row["first_at"] or 0) if row else 0.0
+            if count <= 0:
+                self._conn.rollback()
+                return ""
+            limit = max(1, min(int(every_posts), 100))
+            count_due = count >= limit
+            base = max(first_at or now, float(latest["created_at"]) if latest else (first_at or now))
+            time_due = now >= base + max(1, int(interval_hours)) * 3600
+            normalized = str(trigger or "count").lower()
+            if normalized == "interval":
+                due = time_due
+            elif normalized == "either":
+                due = count_due or time_due
+            else:
+                due = count_due
+            if not force and not due:
+                self._conn.rollback()
+                return ""
+            batch = uuid.uuid4().hex
+            self._conn.execute(
+                "INSERT INTO digest_runs(id, created_at, state, topic) VALUES (?, ?, 'generating', ?)",
+                (batch, now, str(topic or "")[:32]),
+            )
+            take = limit if (count_due or normalized == "count") else 100
+            self._conn.execute(
+                """
+                UPDATE digest_reads SET batch=? WHERE post_id IN (
+                    SELECT post_id FROM digest_reads WHERE batch='' ORDER BY created_at, rowid LIMIT ?
+                )
+                """,
+                (batch, take),
+            )
+            self._conn.commit()
+            return batch
+        except Exception:
+            self._conn.rollback()
+            raise
+
+    def digest_materials(self, batch: str) -> list[dict[str, Any]]:
+        rows = self._conn.execute(
+            """
+            SELECT post_id, title, excerpt, community, created_at
+            FROM digest_reads WHERE batch=? ORDER BY created_at, rowid
+            """,
+            (str(batch),),
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+    def latest_digest_run(self) -> dict[str, Any] | None:
+        row = self._conn.execute(
+            "SELECT id, created_at, state, topic, draft_json, link_id, error FROM digest_runs ORDER BY created_at DESC, rowid DESC LIMIT 1"
+        ).fetchone()
+        return dict(row) if row else None
+
+    def update_digest_run(
+        self,
+        run_id: str,
+        state: str,
+        *,
+        draft_json: str | None = None,
+        link_id: str | None = None,
+        error: str = "",
+    ) -> None:
+        self._conn.execute(
+            """
+            UPDATE digest_runs
+            SET state=?, draft_json=COALESCE(?, draft_json),
+                link_id=COALESCE(?, link_id), error=?
+            WHERE id=?
+            """,
+            (str(state), draft_json, link_id, str(error)[:500], str(run_id)),
+        )
+        self._conn.commit()
+
+    def digest_comment_materials(self, post_id: str, *, limit: int = 3) -> list[str]:
+        """The account's own verified comments under one post."""
+
+        rows = self._conn.execute(
+            """
+            SELECT content, metadata_json FROM outgoing_actions
+            WHERE kind IN ('notification_reply', 'proactive_comment') AND status='verified'
+            ORDER BY updated_at DESC LIMIT 200
+            """
+        ).fetchall()
+        found: list[str] = []
+        for row in rows:
+            try:
+                metadata = json.loads(str(row["metadata_json"] or "{}"))
+            except json.JSONDecodeError:
+                metadata = {}
+            if str(metadata.get("post_id") or "") != str(post_id):
+                continue
+            text = str(row["content"] or "").strip()
+            if text:
+                found.append(text)
+            if len(found) >= max(1, int(limit)):
+                break
+        return list(reversed(found))
 
     def has_outgoing_key(self, action_key: str) -> bool:
         row = self._conn.execute(

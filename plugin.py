@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 import random
 import re
 import time
@@ -245,6 +246,7 @@ HashtagName = Literal[
 
 RunMode = Literal["dry_run", "auto"]
 DmReplyScope = Literal["allowlist", "blocklist"]
+SummaryTrigger = Literal["count", "interval", "either"]
 
 try:
     from .drawpic_gateway import DrawingGateway
@@ -460,6 +462,32 @@ class XiaoheiheAutomationSection(PluginConfigBase):
         order=99,
         default_factory=list,
         json_schema_extra={"hidden": True},
+    )
+    summary_enabled: bool = _ui_field(
+        label="浏览总结发帖",
+        hint="开启后按「每 N 帖 / 每 N 小时」把浏览过的帖子写成一篇 200–400 字、2–4 段的总结，发到上面的「发帖社区」。开启时会暂停按天的自动发帖。",
+        order=20,
+        default=False,
+    )
+    summary_trigger: SummaryTrigger = _ui_field(
+        label="总结触发方式",
+        hint="count：攒够 N 帖就发；interval：距上一批满 N 小时就发；either：两者先到先发。",
+        order=21,
+        default="count",
+    )
+    summary_every_posts: int = _ui_field(
+        label="每多少帖总结一次",
+        hint="按帖数触发时使用，默认 10 帖；单次最多取 100 帖。",
+        order=22,
+        default=10,
+        step=1,
+    )
+    summary_interval_hours: int = _ui_field(
+        label="总结间隔（小时）",
+        hint="按时间触发时使用，默认 24 小时；从本批第一条素材开始计时。",
+        order=23,
+        default=24,
+        step=1,
     )
 
 
@@ -745,6 +773,22 @@ class XiaoheiheConfig(PluginConfigBase):
     @property
     def post_summarize_feed(self) -> bool:
         return bool(self.content.post_summarize_feed)
+
+    @property
+    def summary_enabled(self) -> bool:
+        return bool(self.automation.summary_enabled)
+
+    @property
+    def summary_trigger(self) -> str:
+        return str(self.automation.summary_trigger)
+
+    @property
+    def summary_every_posts(self) -> int:
+        return max(1, min(int(self.automation.summary_every_posts), 100))
+
+    @property
+    def summary_interval_hours(self) -> int:
+        return max(1, min(int(self.automation.summary_interval_hours), 168))
 
     @property
     def post_topic_ids(self) -> list[str]:
@@ -1149,6 +1193,8 @@ class XiaoheiheOperatorPlugin(MaiBotPlugin):
         if self.config.dm_enabled and now - self._last_dm_poll_at >= max(60, int(self.config.dm_poll_interval_seconds)):
             self._last_dm_poll_at = now
             await self._poll_direct_messages(client)
+        if self.config.summary_enabled:
+            await self._maybe_publish_digest(client)
         if now >= self._next_feed_at:
             self._next_feed_at = now + self._next_feed_gap()
             if post_window_active or browse_window_active:
@@ -2025,7 +2071,11 @@ class XiaoheiheOperatorPlugin(MaiBotPlugin):
         if await self._persona_asleep():
             self.ctx.logger.info("小黑盒本次不逛：生活状态显示她在睡觉或小睡")
             return
-        if post_window_active and self._within_quota("proactive_post", int(self.config.posts_per_day)):
+        if (
+            post_window_active
+            and not self.config.summary_enabled
+            and self._within_quota("proactive_post", int(self.config.posts_per_day))
+        ):
             await self._create_proactive_post(client)
         if browse_window_active:
             await self._browse_session(client)
@@ -2186,11 +2236,20 @@ class XiaoheiheOperatorPlugin(MaiBotPlugin):
         )
         if not post_id or not normalize_text(title):
             return
+        safe_title = normalize_text(title, 100)
+        safe_excerpt = normalize_text(body, 160)
+        community = self._feed_community(item)
         self._store.record_seen_post(
             post_id,
-            title=normalize_text(title, 100),
-            excerpt=normalize_text(body, 160),
-            community=self._feed_community(item),
+            title=safe_title,
+            excerpt=safe_excerpt,
+            community=community,
+        )
+        self._store.record_digest_material(
+            post_id,
+            title=safe_title,
+            excerpt=safe_excerpt,
+            community=community,
         )
 
     async def _seen_posts_for_post(self, client) -> list[dict[str, str]]:
@@ -2538,6 +2597,129 @@ class XiaoheiheOperatorPlugin(MaiBotPlugin):
                 str(exc)[:180],
             )
 
+    def _digest_topic(self) -> str:
+        return str(self.config.automation.post_target_primary or "").strip()
+
+    def _digest_status_snapshot(self) -> dict[str, object]:
+        latest = self._store.latest_digest_run() if self._store is not None else None
+        title = ""
+        if latest:
+            draft = _load_digest_draft(latest.get("draft_json"))
+            if draft:
+                title = draft[0]
+        return {
+            "pending": self._store.count_digest_pending() if self._store is not None else 0,
+            "state": str((latest or {}).get("state") or ""),
+            "title": title,
+            "link_id": str((latest or {}).get("link_id") or ""),
+            "error": str((latest or {}).get("error") or ""),
+        }
+
+    async def _maybe_publish_digest(self, client, *, force: bool = False) -> None:
+        """Claim a batch of browsed posts and publish one summary post."""
+
+        if self._store is None or self._generator is None or self._runtime is None:
+            return
+        latest = self._store.latest_digest_run()
+        if latest and str(latest.get("state") or "") == "retry":
+            await self._publish_digest(client, str(latest.get("id") or ""), latest)
+            return
+        batch = self._store.claim_digest(
+            trigger=self.config.summary_trigger,
+            every_posts=self.config.summary_every_posts,
+            interval_hours=self.config.summary_interval_hours,
+            topic=self._digest_topic(),
+            force=force,
+        )
+        if not batch:
+            return
+        materials = self._store.digest_materials(batch)
+        for item in materials:
+            item["my_comments"] = self._store.digest_comment_materials(
+                str(item.get("post_id") or "")
+            )
+        try:
+            draft = await self._generator.digest(materials)
+        except Exception as exc:  # noqa: BLE001
+            self._store.update_digest_run(batch, "error", error=_error_label(exc))
+            self.ctx.logger.warning("小黑盒总结帖生成失败：%s", _error_label(exc))
+            return
+        if not draft:
+            self._store.update_digest_run(batch, "error", error="empty_generated_digest")
+            return
+        title, paragraphs = draft
+        title = normalize_outgoing_text(title)
+        paragraphs = [normalize_outgoing_text(paragraph) for paragraph in paragraphs]
+        if (
+            not title
+            or len(paragraphs) < 2
+            or not all(is_publishable(text)[0] for text in [title, *paragraphs])
+        ):
+            self._store.update_digest_run(batch, "failed", error="content_boundary")
+            return
+        draft_json = json.dumps(
+            {"title": title, "paragraphs": paragraphs}, ensure_ascii=False
+        )
+        self._store.update_digest_run(batch, "ready", draft_json=draft_json)
+        if str(self.config.mode).lower() == "dry_run":
+            self.ctx.logger.info("小黑盒总结帖处于 dry_run：%s", title[:30])
+            return
+        await self._publish_digest(client, batch, {"draft_json": draft_json})
+
+    async def _publish_digest(self, client, run_id: str, run: dict[str, object]) -> None:
+        if self._store is None or not run_id:
+            return
+        draft = _load_digest_draft(run.get("draft_json"))
+        if draft is None:
+            self._store.update_digest_run(run_id, "error", error="draft_missing")
+            return
+        title, paragraphs = draft
+        topic = self._digest_topic()
+        if not topic:
+            self._store.update_digest_run(run_id, "failed", error="no_topic")
+            return
+        try:
+            topic_ids = await self._resolve_post_topic_ids(client, [topic])
+        except Exception as exc:  # noqa: BLE001
+            self._store.update_digest_run(run_id, "error", error=_error_label(exc))
+            return
+        if not topic_ids:
+            self._store.update_digest_run(run_id, "failed", error="topic_unresolved")
+            return
+        self._store.update_digest_run(run_id, "sending")
+        try:
+            result = await client.create_post(
+                title=title,
+                content_blocks=[{"type": "text", "text": text} for text in paragraphs],
+                topic_ids=",".join(topic_ids),
+                hashtags=self.config.post_hashtags,
+            )
+            link_id = str(result.get("link_id") or "")
+            if not link_id:
+                self._store.update_digest_run(run_id, "unknown", error="missing_link_id")
+                return
+            context = await client.fetch_thread_context(link_id)
+            if context and _same_post_content(title, "\n".join(paragraphs), context):
+                self._store.update_digest_run(run_id, "sent", link_id=link_id)
+                self.ctx.logger.info("小黑盒总结帖已发布：link_id=%s", link_id)
+            else:
+                self._store.update_digest_run(
+                    run_id, "unknown", link_id=link_id, error="readback_not_found"
+                )
+        except Exception as exc:  # noqa: BLE001
+            category = str(getattr(exc, "category", ""))
+            rejected = category in {
+                "upstream_rejected",
+                "credential_invalid",
+                "forbidden",
+                "rate_limited",
+                "http",
+                "response_shape",
+            }
+            self._store.update_digest_run(
+                run_id, "failed" if rejected else "unknown", error=_error_label(exc)
+            )
+            self.ctx.logger.error("小黑盒总结帖发布失败：%s", _error_label(exc))
     async def _resolve_post_topic_ids(self, client, targets: list[str]) -> list[str]:
         """Resolve friendly config options while retaining old numeric IDs."""
 
@@ -2603,6 +2785,13 @@ class XiaoheiheOperatorPlugin(MaiBotPlugin):
                     0, int(self._dm_blocked_until - time.time())
                 ),
                 "state": dm_summary,
+            },
+            "summary": {
+                "enabled": bool(self.config.summary_enabled),
+                "trigger": str(self.config.summary_trigger),
+                "every_posts": int(self.config.summary_every_posts),
+                "interval_hours": int(self.config.summary_interval_hours),
+                **self._digest_status_snapshot(),
             },
             "settings_help": {
                 "mode": "dry_run 只记录计划；auto 才会真实发送",
@@ -2905,6 +3094,13 @@ class XiaoheiheOperatorPlugin(MaiBotPlugin):
                 "paused_remaining_seconds": max(0, int(self._dm_blocked_until - now)),
                 **dm_summary,
             },
+            "summary": {
+                "enabled": bool(self.config.summary_enabled),
+                "trigger": str(self.config.summary_trigger),
+                "every_posts": int(self.config.summary_every_posts),
+                "interval_hours": int(self.config.summary_interval_hours),
+                **self._digest_status_snapshot(),
+            },
             "recent": recent,
         }
 
@@ -2990,6 +3186,94 @@ class XiaoheiheOperatorPlugin(MaiBotPlugin):
         return False, f"发帖未确认：{status} | {row.get('error') or ''} | link_id={link_id or '-'}", 2
 
     @Command(
+        "xhh_summary",
+        description="可在 MaiBot 聊天中输入 /xhh_summary，查看浏览总结发帖状态。",
+        pattern=r"^/xhh_summary$",
+        permission="operator",
+    )
+    async def handle_summary_command(self, **kwargs):
+        del kwargs
+        if self._store is None:
+            return False, "插件尚未加载", 2
+        latest = self._store.latest_digest_run() or {}
+        title = ""
+        draft = _load_digest_draft(latest.get("draft_json")) if latest else None
+        if draft:
+            title = draft[0]
+        text = (
+            f"浏览总结：{'开启' if self.config.summary_enabled else '关闭'}\n"
+            f"待总结素材：{self._store.count_digest_pending()} 帖\n"
+            f"最近一次：{latest.get('state') or '-'}  {title or '-'}\n"
+            f"link_id：{latest.get('link_id') or '-'}\n"
+            f"错误：{latest.get('error') or '-'}"
+        )
+        return True, text, 2
+
+    @Command(
+        "xhh_summary_now",
+        description="可在 MaiBot 聊天中输入 /xhh_summary_now，立即用当前素材生成并发布一篇总结。",
+        pattern=r"^/xhh_summary_now$",
+        permission="operator",
+    )
+    async def handle_summary_now_command(self, **kwargs):
+        del kwargs
+        if not self.config.summary_enabled:
+            return False, "浏览总结未开启（配置里打开「浏览总结发帖」）", 2
+        if self._runtime is None or self._runtime.credentials is None:
+            return False, "小黑盒尚未登录或插件未加载", 2
+        try:
+            client = await self._runtime.client()
+            await self._maybe_publish_digest(client, force=True)
+        except Exception as exc:  # noqa: BLE001
+            return False, f"总结失败：{_error_label(exc)}", 2
+        latest = (self._store.latest_digest_run() or {}) if self._store else {}
+        state = str(latest.get("state") or "")
+        if state == "sent":
+            return True, f"总结帖已发布：link_id={latest.get('link_id') or '-'}", 2
+        if state == "ready":
+            return True, "dry_run：总结草稿已生成，切 auto 后会发布", 2
+        if not latest:
+            return False, "没有可总结的素材，先让它逛几篇帖子", 2
+        return False, f"总结未完成：{state} | {latest.get('error') or ''}", 2
+
+    @Command(
+        name="xhh_summary_retry",
+        description="可在 MaiBot 聊天中输入 /xhh_summary_retry，重试失败/出错的总结任务。",
+        pattern=r"^/xhh_summary_retry$",
+        permission="operator",
+    )
+    async def handle_summary_retry_command(self, **kwargs):
+        del kwargs
+        if self._store is None:
+            return False, "插件尚未加载", 2
+        latest = self._store.latest_digest_run()
+        if not latest:
+            return False, "没有总结任务", 2
+        state = str(latest.get("state") or "")
+        if state not in {"error", "failed"}:
+            return False, f"当前状态 {state} 不能重试（unknown 需先在小黑盒核对）", 2
+        self._store.update_digest_run(str(latest["id"]), "retry")
+        return True, "已放回重试队列，下一轮检查会重新发布已保存的草稿", 2
+
+    @Command(
+        name="xhh_summary_skip",
+        description="可在 MaiBot 聊天中输入 /xhh_summary_skip，跳过当前总结任务。",
+        pattern=r"^/xhh_summary_skip$",
+        permission="operator",
+    )
+    async def handle_summary_skip_command(self, **kwargs):
+        del kwargs
+        if self._store is None:
+            return False, "插件尚未加载", 2
+        latest = self._store.latest_digest_run()
+        if not latest:
+            return False, "没有总结任务", 2
+        state = str(latest.get("state") or "")
+        if state not in {"error", "failed", "unknown", "retry"}:
+            return False, f"当前状态 {state} 无需跳过", 2
+        self._store.update_digest_run(str(latest["id"]), "discarded")
+        return True, "已跳过本轮总结，素材会留到下一批", 2
+    @Command(
         "xhh_help",
         description="可在 MaiBot 聊天中输入 /xhh_help，查看小黑盒插件的运维命令。",
         pattern=r"^/xhh_help$",
@@ -3006,6 +3290,8 @@ class XiaoheiheOperatorPlugin(MaiBotPlugin):
             "/xhh_test 帖子ID 生成一条预览回复（不发送）\n"
             "/xhh_whoami 查看自己的 platform:id（配置命令权限用）\n"
             "/xhh_post_now 立即尝试一次主动发帖（忽略时间窗）\n"
+            "/xhh_summary 查看浏览总结状态；/xhh_summary_now 立即总结一次\n"
+            "/xhh_summary_retry 重试失败总结；/xhh_summary_skip 跳过本轮总结\n"
             "/xhh_login 生成扫码二维码；/xhh_login_check 检查登录"
         )
         return True, text, 2
@@ -3344,6 +3630,25 @@ def _comment_matches(
         if len(expected) >= 6 and (expected in text or text in expected):
             return True
     return False
+
+
+def _load_digest_draft(value: object) -> tuple[str, list[str]] | None:
+    if isinstance(value, str):
+        try:
+            payload = json.loads(value)
+        except json.JSONDecodeError:
+            return None
+    elif isinstance(value, dict):
+        payload = value
+    else:
+        return None
+    title = str(payload.get("title") or "").strip()
+    paragraphs = [
+        str(text).strip() for text in (payload.get("paragraphs") or []) if str(text).strip()
+    ]
+    if not title or len(paragraphs) < 2:
+        return None
+    return title, paragraphs
 
 
 def create_plugin():

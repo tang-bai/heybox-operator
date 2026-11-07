@@ -70,10 +70,19 @@
 - 配置新增 `post_summarize_feed`（默认开）；关闭后 `seen_posts` 恒为空，回到旧行为。首帖自我介绍方向只在没有素材时追加。
 - 动作 metadata 增加 `seen_post_ids`；`_log_debug()` 兼容没有 `debug()` 的宿主/测试 logger。
 - 验证：`tests/test_post_from_seen.py`（9 个）。
+### 9. 浏览总结发帖（0.10.0）
+
+- **素材**：`digest_reads` 表存实际点开的帖子（按 `post_id` 去重），并关联该帖下 `verified` 的自己的评论（`digest_comment_materials`）。
+- **触发**：`claim_digest()` 按 `count / interval / either` 判断，一次最多取 100 帖；批次写 `digest_runs`，状态从 `generating` 开始。
+- **生成**：`content_generator.digest()`，提示词要求 200–400 字、2–4 段，输出 `{"title","paragraphs"}`；标题/段落都过表情规范化与内容边界。
+- **发布**：每段一个 `text` block，走 `create_post`；`sent` / `unknown` / `failed` 状态与 `link_id` 落库，`unknown` 不自动重发。
+- **命令**：`/xhh_summary`、`/xhh_summary_now`、`/xhh_summary_retry`、`/xhh_summary_skip`；仪表盘新增「浏览总结」卡片。
+- 开启总结后 `_proactive_once()` 不再执行按天的 `_create_proactive_post()`，避免两条发帖路径打架。
+- 验证：`tests/test_digest.py`（7 个）。
 ## 二、怎么验证
 
 ```powershell
-# 117 个用例（stdlib unittest，无需装依赖）
+# 124 个用例（stdlib unittest，无需装依赖）
 cd tests
 $env:PYTHONPATH = "<插件目录>;<插件目录>\tests"
 python -m unittest discover -s . -p "test_*.py"
@@ -82,7 +91,7 @@ python -m unittest discover -s . -p "test_*.py"
 python -m compileall -q .
 ```
 
-当前结果：`Ran 117 tests ... OK`。
+当前结果：`Ran 124 tests ... OK`。
 
 真机验收建议：
 
