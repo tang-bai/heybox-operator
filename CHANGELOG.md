@@ -2,6 +2,11 @@
 
 本文件记录 heybox-operator（二次开发自 [HannJia/xiaoheihe-operator](https://github.com/HannJia/xiaoheihe-operator)）的变更，按时间倒序。
 
+## 2026-11-08（0.14.2：工作区与页面同步改名）
+
+- `webui.json` 的 `workspace_title` 改为「刷小黑盒」；仪表盘标题、登录提示、工具描述与状态文案同步。
+- 版本 `0.14.2`。
+
 ## 2026-11-08（0.14.1：显示名改为「刷小黑盒」）
 
 - `_manifest.json` 的 `name` 从「小黑盒运营」改为「刷小黑盒」，插件中心与 WebUI 插件列表按新名字展示；`id`、仓库地址、功能均不变。

@@ -1,7 +1,7 @@
 {
   "schema_version": 2,
   "required_capabilities": ["custom_pages"],
-  "workspace_title": "小黑盒运营",
+  "workspace_title": "刷小黑盒",
   "pages": [
     {
       "id": "login",

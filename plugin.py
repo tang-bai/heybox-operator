@@ -1065,7 +1065,7 @@ class XiaoheiheOperatorPlugin(MaiBotPlugin):
             self.ctx.logger.info("小黑盒生图：使用直连生图 API（model=%s）", self._image_gen.model)
         else:
             self.ctx.logger.info("小黑盒生图：未配置直连生图 API，配图将降级为纯文字或走麦麦绘图")
-        self.ctx.logger.info("小黑盒运营插件已加载：enabled=%s mode=%s", self.config.enabled, self.config.mode)
+        self.ctx.logger.info("刷小黑盒插件已加载：enabled=%s mode=%s", self.config.enabled, self.config.mode)
         await self._log_persona_source()
         if self.config.enabled:
             self._start_worker()
@@ -1201,7 +1201,7 @@ class XiaoheiheOperatorPlugin(MaiBotPlugin):
     async def on_config_update(self, scope: str, config_data: dict, version: str) -> None:
         if scope != "self":
             return
-        self.ctx.logger.info("小黑盒运营插件配置已更新：version=%s", version)
+        self.ctx.logger.info("刷小黑盒插件配置已更新：version=%s", version)
         if self._persona is not None:
             self._generator = ContentGenerator(
                 self.ctx.llm,
@@ -1229,7 +1229,7 @@ class XiaoheiheOperatorPlugin(MaiBotPlugin):
             except asyncio.CancelledError:
                 raise
             except Exception as exc:  # noqa: BLE001
-                self.ctx.logger.error("小黑盒运营轮询失败：%s", exc)
+                self.ctx.logger.error("刷小黑盒轮询失败：%s", exc)
             await asyncio.sleep(max(30, int(self.config.poll_interval_seconds)))
 
     async def _poll_once(self) -> None:
@@ -2820,7 +2820,7 @@ class XiaoheiheOperatorPlugin(MaiBotPlugin):
         ):
             await self._create_proactive_post(client)
 
-    @Tool("xiaoheihe_status", brief_description="查看小黑盒运营插件状态")
+    @Tool("xiaoheihe_status", brief_description="查看刷小黑盒插件状态")
     async def handle_status(self, **kwargs):
         dm_summary = (
             self._dm_store.summary(self.config.profile_id)
@@ -2878,7 +2878,7 @@ class XiaoheiheOperatorPlugin(MaiBotPlugin):
                 "dm_generate_images": "开启后私信回复会附带一张生成图，失败自动降级纯文字",
                 "dm_mode": "私信默认 dry_run；确认链路后改成 auto 才会真正发送",
             },
-            "message": "小黑盒运营插件已加载" if not self.config.enabled else "小黑盒运营插件运行中",
+            "message": "刷小黑盒插件已加载" if not self.config.enabled else "刷小黑盒插件运行中",
         }
 
     @Tool("xiaoheihe_request_login", brief_description="生成小黑盒扫码登录信息")
@@ -2993,7 +2993,7 @@ class XiaoheiheOperatorPlugin(MaiBotPlugin):
 
     @Command(
         "xhh_status",
-        description="可在 MaiBot 聊天中输入 /xhh_status，查看小黑盒运营插件状态。",
+        description="可在 MaiBot 聊天中输入 /xhh_status，查看刷小黑盒插件状态。",
         pattern=r"^/xhh_status$",
         permission="operator",
     )
@@ -3013,7 +3013,7 @@ class XiaoheiheOperatorPlugin(MaiBotPlugin):
             return False, f"小黑盒登录二维码生成失败：{result.get('error') or result.get('message', 'unknown')}", 1
         return (
             True,
-            "小黑盒登录二维码已生成，请打开 MaiBot 的‘小黑盒运营’插件工作台扫码；扫码后使用 /xhh_login_check 检查状态。",
+            "小黑盒登录二维码已生成，请打开 MaiBot 的‘刷小黑盒’插件工作台扫码；扫码后使用 /xhh_login_check 检查状态。",
             2,
         )
 
@@ -3032,7 +3032,7 @@ class XiaoheiheOperatorPlugin(MaiBotPlugin):
 
     @API(
         name="webui_dashboard",
-        description="读取小黑盒运营仪表盘：账号、队列、今日额度、私信状态与最近动作",
+        description="读取刷小黑盒仪表盘：账号、队列、今日额度、私信状态与最近动作",
         version="1",
     )
     async def api_webui_dashboard(self, **kwargs):
