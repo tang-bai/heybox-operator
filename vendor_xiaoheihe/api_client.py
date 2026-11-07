@@ -592,23 +592,23 @@ class XiaoheiheApiClient:
         # 动态分区由 topic_id 决定：默认综合区 58144 用 28，其它真实分区用 27。
         # 用错会返回「错误的动态分区」，和正文有没有图片无关。
         link_tag = "28" if str(topic_ids).strip() == "58144" else "27"
+        # 只发网页端实测通过的字段；多余的 original/declaration 等会被判
+        # 「错误的动态分区」或参数错误。
         form: dict[str, Any] = {
             "title": str(title).strip(),
             "desc": first_text[:100] or str(title).strip()[:100],
             "text": json.dumps(content_blocks, ensure_ascii=False),
             "post_type": "1",
             "link_tag": link_tag,
-            "draft": "1" if draft else "0",
-            "view_limit": "1",
-            "original": "1",
-            "declaration": "1",
-            "extra_declaration": "-1",
-            "words_count": str(sum(len(str(item.get("text", ""))) for item in content_blocks)),
         }
         if topic_ids:
             form["topic_ids"] = str(topic_ids)
         if hashtags:
             form["hashtags"] = json.dumps(list(hashtags), ensure_ascii=False)
+        if draft:
+            form["draft"] = "1"
+            form["view_limit"] = "1"
+            form.setdefault("topic_ids", "58144")
         if str(edit_link_id).strip():
             form["edit"] = "1"
             form["link_id"] = str(edit_link_id).strip()

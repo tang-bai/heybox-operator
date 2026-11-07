@@ -2,6 +2,12 @@
 
 本文件记录 heybox-operator（二次开发自 [HannJia/xiaoheihe-operator](https://github.com/HannJia/xiaoheihe-operator)）的变更，按时间倒序。
 
+## 2026-11-08（0.13.0：发帖表单改为网页端最小字段集）
+
+- `create_post()` 只提交网页端实测通过的字段：`title / desc / post_type / text / link_tag / topic_ids / hashtags`；去掉 `original / declaration / extra_declaration / words_count / view_limit`（只有存草稿时才带 `draft` + `view_limit`）。这些多余字段会被判「错误的动态分区」或参数错误。
+- 发帖前日志输出实际使用的 `topic_ids` 与 `hashtags`；`/xhh_post_now` 失败时返回 `topic_ids=...`，总结失败时返回 `topic=...`，便于定位是分区还是内容问题。
+- 测试：`test_post_form` 覆盖最小表单与 `58144→28 / 其它→27`；全量 134 个通过。
+
 ## 2026-11-08（0.12.0：修复动态分区与 Replyer 会话策略）
 
 - **修复发帖「错误的动态分区」**：`link_tag` 不再按正文有没有图片决定，而是由分区决定——默认综合区 `58144` 用 `28`，其它真实分区用 `27`；`desc` 改为第一段正文前 100 字（原来为空）。

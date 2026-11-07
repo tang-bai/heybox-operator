@@ -2583,6 +2583,11 @@ class XiaoheiheOperatorPlugin(MaiBotPlugin):
 
             stage = "create_post"
             external_send_started = True
+            self.ctx.logger.info(
+                "小黑盒发帖参数：topic_ids=%s hashtags=%s",
+                topic_id_value,
+                self.config.post_hashtags,
+            )
             result = await client.create_post(
                 title=title,
                 content_blocks=blocks,
@@ -2749,6 +2754,11 @@ class XiaoheiheOperatorPlugin(MaiBotPlugin):
             return
         self._store.update_digest_run(run_id, "sending")
         try:
+            self.ctx.logger.info(
+                "小黑盒总结帖参数：topic_ids=%s hashtags=%s",
+                ",".join(topic_ids),
+                self.config.post_hashtags,
+            )
             result = await client.create_post(
                 title=title,
                 content_blocks=[{"type": "text", "text": text} for text in paragraphs],
@@ -3244,7 +3254,12 @@ class XiaoheiheOperatorPlugin(MaiBotPlugin):
         if status == OutgoingStatus.DRY_RUN.value:
             return True, "dry_run：已生成草稿但未发送（切 auto 后会真的发）", 2
         link_id = str(row.get("external_id") or "")
-        return False, f"发帖未确认：{status} | {row.get('error') or ''} | link_id={link_id or '-'}", 2
+        metadata = row.get("metadata") if isinstance(row.get("metadata"), dict) else {}
+        topic_ids = str(metadata.get("topic_ids") or "")
+        return False, (
+            f"发帖未确认：{status} | {row.get('error') or ''}"
+            f" | link_id={link_id or '-'} | topic_ids={topic_ids or '-'}"
+        ), 2
 
     @Command(
         "xhh_summary",
@@ -3295,7 +3310,10 @@ class XiaoheiheOperatorPlugin(MaiBotPlugin):
             return True, "dry_run：总结草稿已生成，切 auto 后会发布", 2
         if not latest:
             return False, "没有可总结的素材，先让它逛几篇帖子", 2
-        return False, f"总结未完成：{state} | {latest.get('error') or ''}", 2
+        return False, (
+            f"总结未完成：{state} | {latest.get('error') or ''}"
+            f" | topic={latest.get('topic') or '-'}"
+        ), 2
 
     @Command(
         name="xhh_summary_retry",

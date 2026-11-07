@@ -92,6 +92,12 @@
 - `HostReplyer` 默认用 `platform="internal"` 建会话（宿主心流只对 `internal/webui` 与本地控制台放行适配器策略）；新增 `host_replyer_stream_id` 可指定已有流。
 - 真机日志：`适配器名单禁止创建聊天运行实例` 应消失；若仍出现，填 `host_replyer_stream_id`。
 - 验证：`tests/test_post_form.py`（2 个）+ `tests/test_host_replyer.py`（8 个）。
+### 12. 发帖表单最小化（0.13.0）
+
+- 参考 `xhhrobot` / `xiaoheihe_adapter` 的实测表单，`create_post()` 只发 `title/desc/post_type/text/link_tag/topic_ids/hashtags`；`draft=0` 时不再带 `view_limit` 等字段。
+- `desc` 取第一段正文前 100 字；`link_tag` 仍按 `58144→28 / 其它→27`。
+- 发帖前日志 `小黑盒发帖参数：topic_ids=...`；`/xhh_post_now` 失败会回显 topic_ids，先确认它是不是你选的社区 ID。
+- 验证：`tests/test_post_form.py`（2 个）。
 ## 二、怎么验证
 
 ```powershell

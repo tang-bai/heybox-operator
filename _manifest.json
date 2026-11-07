@@ -1,7 +1,7 @@
 {
   "manifest_version": 2,
   "id": "org.orge-8.xiaoheihe-operator",
-  "version": "0.12.0",
+  "version": "0.13.0",
   "name": "小黑盒运营",
   "description": "让 MaiBot 用自己的人设在小黑盒逛帖、点赞、评论和发帖，可联动生活轨迹和配图。",
   "author": {
