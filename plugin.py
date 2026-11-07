@@ -2860,6 +2860,30 @@ class XiaoheiheOperatorPlugin(MaiBotPlugin):
             await self._poll_direct_messages(client)
 
     @Command(
+        "xhh_whoami",
+        description="可在 MaiBot 聊天中输入 /xhh_whoami，查看当前平台与用户 ID（用于配置命令权限）。",
+        pattern=r"^/xhh_whoami$",
+    )
+    async def handle_whoami_command(self, **kwargs):
+        """权限诊断：不需要操作员权限，只回显自己的身份。"""
+
+        platform = str(kwargs.get("platform") or "").strip()
+        user_id = str(kwargs.get("user_id") or "").strip()
+        session_id = str(
+            kwargs.get("session_id") or kwargs.get("stream_id") or ""
+        ).strip()
+        scoped = f"{platform.lower()}:{user_id}" if platform and user_id else "(缺失)"
+        text = (
+            f"platform={platform or '-'}\n"
+            f"user_id={user_id or '-'}\n"
+            f"platform:id={scoped}\n"
+            f"session_id={session_id or '-'}\n"
+            f"is_local_operator={bool(kwargs.get('is_local_operator'))}\n"
+            "把 platform:id 填进 config/bot_config.toml 的 [plugin] permission 即可获得操作员权限。"
+        )
+        return True, text, 2
+
+    @Command(
         "xhh_help",
         description="可在 MaiBot 聊天中输入 /xhh_help，查看小黑盒插件的运维命令。",
         pattern=r"^/xhh_help$",
@@ -2874,6 +2898,7 @@ class XiaoheiheOperatorPlugin(MaiBotPlugin):
             "/xhh_retry 把失败评论放回重试队列\n"
             "/xhh_clear_queue [帖子ID] 取消待发送评论\n"
             "/xhh_test 帖子ID 生成一条预览回复（不发送）\n"
+            "/xhh_whoami 查看自己的 platform:id（配置命令权限用）\n"
             "/xhh_login 生成扫码二维码；/xhh_login_check 检查登录"
         )
         return True, text, 2

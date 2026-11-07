@@ -189,6 +189,19 @@ class AdminCommandTests(unittest.TestCase):
             self.assertIn("预览回复", text)
             plugin._store.close()
 
+    def test_whoami_reports_scoped_id(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            plugin = self._plugin(Path(tmp))
+            ok, text, _ = asyncio.run(
+                plugin.handle_whoami_command(
+                    platform="QQ", user_id="1249922508", session_id="session-1"
+                )
+            )
+            self.assertTrue(ok)
+            self.assertIn("platform:id=qq:1249922508", text)
+            self.assertIn("session_id=session-1", text)
+            plugin._store.close()
+
     def test_check_command_runs_one_poll(self):
         with tempfile.TemporaryDirectory() as tmp:
             plugin = self._plugin(Path(tmp))

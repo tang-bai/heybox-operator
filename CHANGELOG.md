@@ -2,6 +2,12 @@
 
 本文件记录 heybox-operator（二次开发自 [HannJia/xiaoheihe-operator](https://github.com/HannJia/xiaoheihe-operator)）的变更，按时间倒序。
 
+## 2026-11-08（0.9.1：新增 /xhh_whoami 权限诊断）
+
+- 新增 `/xhh_whoami`（**不需要操作员权限**）：回显 `platform`、`user_id`、`platform:id`、`session_id`，用于把账号正确填进 `config/bot_config.toml` 的 `[plugin] permission` 或某条命令的 `allow_users`。
+- 解决「明明放行了 QQ 号仍提示无权限」时，无法确认平台前缀（`qq:` / `napcat:` 等）的问题。
+- 测试：`tests/test_admin_commands.py` 补 1 个用例，全量 103 个通过。
+
 ## 2026-11-08（0.9.0：发帖改为总结今天刷到的帖子）
 
 - **发帖内容来源改变**：逛推荐流时把实际点开的帖子写入新的 `seen_posts` 表（标题 / 摘要 / 社区，保留 7 天）；发帖时取当天的记录交给模型，让它**总结今天刷到的内容并挑 1–2 篇评论**。

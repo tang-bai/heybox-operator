@@ -41,6 +41,7 @@
 | `/xhh_clear_queue [帖子ID]` | 取消尚未发送的评论回复（可按帖子过滤） |
 | `/xhh_test 帖子ID` | 读帖并生成一条预览回复，不发送 |
 | `/xhh_login`、`/xhh_login_check` | 生成扫码二维码 / 检查登录状态 |
+| `/xhh_whoami` | 查看自己的 `platform:id`（配置命令权限用，无需权限） |
 | `/xhh_help` | 命令列表 |
 
 ## WebUI
