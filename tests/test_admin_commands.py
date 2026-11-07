@@ -221,6 +221,28 @@ class AdminCommandTests(unittest.TestCase):
             self.assertIn("matched=True", text)
             plugin._store.close()
 
+    def test_post_now_reports_unknown_status(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            plugin = self._plugin(Path(tmp))
+
+            async def fake_post(client, *, ignore_window=False):
+                plugin._store.begin_outgoing(
+                    OutgoingAction(
+                        "post:x", "proactive_post", "100", "正文", metadata={"title": "t", "body": "正文"}
+                    )
+                )
+                plugin._store.update_outgoing(
+                    "post:x",
+                    OutgoingStatus.SEND_UNKNOWN,
+                    error="create_post:upstream_rejected:分区不存在",
+                )
+
+            plugin._create_proactive_post = fake_post
+            ok, text, _ = asyncio.run(plugin.handle_post_now_command())
+            self.assertFalse(ok)
+            self.assertIn("create_post:upstream_rejected", text)
+            plugin._store.close()
+
     def test_check_command_runs_one_poll(self):
         with tempfile.TemporaryDirectory() as tmp:
             plugin = self._plugin(Path(tmp))

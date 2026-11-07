@@ -2300,10 +2300,10 @@ class XiaoheiheOperatorPlugin(MaiBotPlugin):
         self._store.update_outgoing(action_key, OutgoingStatus.VERIFIED)
         return True
 
-    async def _create_proactive_post(self, client) -> None:
+    async def _create_proactive_post(self, client, *, ignore_window: bool = False) -> None:
         if self._store is None or self._generator is None or self._persona is None:
             return
-        if not _time_window_active(
+        if not ignore_window and not _time_window_active(
             self.config.post_active_start_time,
             self.config.post_active_end_time,
         ):
@@ -2947,6 +2947,32 @@ class XiaoheiheOperatorPlugin(MaiBotPlugin):
         return True, text, 2
 
     @Command(
+        "xhh_post_now",
+        description="可在 MaiBot 聊天中输入 /xhh_post_now，立即尝试一次主动发帖（忽略时间窗，仍遵守 dry_run）。",
+        pattern=r"^/xhh_post_now$",
+        permission="operator",
+    )
+    async def handle_post_now_command(self, **kwargs):
+        del kwargs
+        if self._store is None or self._runtime is None or self._runtime.credentials is None:
+            return False, "小黑盒尚未登录或插件未加载", 2
+        try:
+            client = await self._runtime.client()
+            await self._create_proactive_post(client, ignore_window=True)
+        except Exception as exc:  # noqa: BLE001
+            return False, f"发帖失败：{_error_label(exc)}", 2
+        rows = self._store.list_outgoing(limit=1)
+        if not rows:
+            return False, "没有产生发帖动作：检查发帖社区是否已选、冷却是否已过", 2
+        row = rows[0]
+        status = str(row.get("status") or "")
+        if status == OutgoingStatus.VERIFIED.value:
+            return True, f"发帖成功：link_id={row.get('external_id') or '-'}", 2
+        if status == OutgoingStatus.DRY_RUN.value:
+            return True, "dry_run：已生成草稿但未发送（切 auto 后会真的发）", 2
+        return False, f"发帖未确认：{status} | {row.get('error') or ''}", 2
+
+    @Command(
         "xhh_help",
         description="可在 MaiBot 聊天中输入 /xhh_help，查看小黑盒插件的运维命令。",
         pattern=r"^/xhh_help$",
@@ -2962,6 +2988,7 @@ class XiaoheiheOperatorPlugin(MaiBotPlugin):
             "/xhh_clear_queue [帖子ID] 取消待发送评论\n"
             "/xhh_test 帖子ID 生成一条预览回复（不发送）\n"
             "/xhh_whoami 查看自己的 platform:id（配置命令权限用）\n"
+            "/xhh_post_now 立即尝试一次主动发帖（忽略时间窗）\n"
             "/xhh_login 生成扫码二维码；/xhh_login_check 检查登录"
         )
         return True, text, 2

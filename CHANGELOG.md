@@ -2,6 +2,12 @@
 
 本文件记录 heybox-operator（二次开发自 [HannJia/xiaoheihe-operator](https://github.com/HannJia/xiaoheihe-operator)）的变更，按时间倒序。
 
+## 2026-11-08（0.9.5：新增 /xhh_post_now 手动发帖诊断）
+
+- 新增 `/xhh_post_now`（操作员权限）：立即走一遍主动发帖流程，**忽略发帖时间窗**，仍遵守 `dry_run`；返回 `verified` / `dry_run` / 具体错误标签，便于排查 `proactive_post` 被拒原因，不用等到第二天。
+- `_create_proactive_post()` 增加 `ignore_window` 参数（仅命令层使用）。
+- 测试：`tests/test_admin_commands.py` 补 1 个用例，全量 116 个通过。
+
 ## 2026-11-08（0.9.4：主动发帖错误分类与 link_id 保留）
 
 - **错误标签细化**：`proactive_post` 不再只记 `XiaoheiheApiError`，而是写出阶段与分类：
