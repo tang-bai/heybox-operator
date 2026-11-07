@@ -107,14 +107,19 @@ python -m compileall -q .
 | 私信仍是逆向契约 | 私信发送依赖网页聊天面板的参数和 Cookie 形状，小黑盒改版即失效；插件只会失败/暂停，不会绕过风控。默认 `dm_enabled=false`、`dm_mode=dry_run`，建议长期保持 1–3 条/天。 |
 | 单文件体量 | `plugin.py` 仍约 2300 行，配置转发属性有 30 多个，后续改动容易再出现 `self.xxx` / `self.config.xxx` 混用。 |
 
-## 四、回滚
+## 四、回滚与发版检查
 
-本轮改动未提交，全部在 working tree 里：
+改动已提交到 `tang-bai/heybox-operator` 的 `main`；需要回滚时：
 
 ```powershell
-git status              # 看改了哪些文件
-git diff                # 看具体改动
-git checkout -- .       # 全量回滚到上游快照（会丢掉本轮修复）
+git log --oneline -10     # 找到目标提交
+git revert <commit>       # 生成一个反向提交，保留历史
 ```
 
-需要提 PR 给作者时，把 `plugin.py`、`image_generation.py`、`dm_store.py`、`vendor_xiaoheihe/{api_client,endpoints,parsers}.py`、`tests/test_dm_*.py`、`tests/test_config_migration.py`、`tests/test_image_generation_guard.py`、`tests/test_plugin_loading.py` 的改动一起发即可，其余（CHANGELOG/README/MAINTENANCE/_manifest.json 版本号/docs）属于维护者自选。
+发版检查表：
+
+- `_manifest.json` 版本、`CHANGELOG.md` 标题、`git tag`、GitHub Release 四者一致；
+- README 顶部的 `release-x.y.z` 是**静态徽章**（仓库私有，shields.io 动态徽章会显示 no releases or repo not found），发版时手工改；
+- `cd tests; $env:PYTHONPATH="<插件目录>;<插件目录>\tests"; python -m unittest discover -s . -p "test_*.py"` 全绿；
+- 改过 `webui.json` 或页面后重启 MaiBot，确认工作区能打开两个页签；
+- 给上游提 PR 只需带 `plugin.py`、`vendor_xiaoheihe/`、`tests/` 与根目录新增模块，文档类改动属于维护者自选。
