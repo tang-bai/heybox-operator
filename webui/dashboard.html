@@ -1,0 +1,247 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>小黑盒运营仪表盘</title>
+  <style>
+    :root { color-scheme: light dark; }
+    body { margin: 0; padding: 24px; background: var(--maibot-background, #fff); color: var(--maibot-foreground, #202124); font-family: var(--maibot-font-body, system-ui, sans-serif); }
+    .shell { max-width: 1040px; margin: 0 auto; display: grid; gap: 16px; }
+    .head { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 12px; }
+    h1 { margin: 0 0 6px; font-size: 22px; }
+    h2 { margin: 0 0 10px; font-size: 15px; font-weight: 600; }
+    .muted { color: var(--maibot-muted, #6b7280); }
+    .row { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+    button { border: 0; border-radius: 8px; padding: 8px 14px; cursor: pointer; color: var(--maibot-primary-foreground, #fff); background: var(--maibot-primary, #4f46e5); }
+    button.secondary { color: var(--maibot-foreground, #202124); background: var(--maibot-soft, #eef2ff); }
+    button:disabled { cursor: wait; opacity: .6; }
+    .grid { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); }
+    .card { padding: 18px; border: 1px solid var(--maibot-border, #ddd); border-radius: 12px; background: var(--maibot-surface, #fff); }
+    .kv { display: grid; grid-template-columns: auto 1fr; gap: 6px 14px; font-size: 14px; line-height: 1.6; }
+    .kv span:nth-child(odd) { color: var(--maibot-muted, #6b7280); }
+    .chips { display: flex; flex-wrap: wrap; gap: 8px; }
+    .chip { padding: 4px 10px; border-radius: 999px; background: var(--maibot-soft, #eef2ff); font-size: 13px; }
+    .chip b { font-weight: 600; }
+    .table-wrap { overflow-x: auto; }
+    table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    th, td { padding: 8px 10px; text-align: left; border-bottom: 1px solid var(--maibot-border, #e5e7eb); vertical-align: top; }
+    th { color: var(--maibot-muted, #6b7280); font-weight: 600; white-space: nowrap; }
+    td.nowrap { white-space: nowrap; }
+    .ok { color: #15803d; }
+    .bad { color: #b91c1c; }
+    .warn { color: #b45309; }
+    .statusline { margin: 12px 0 0; min-height: 20px; font-size: 13px; }
+    .empty { padding: 14px 2px; color: var(--maibot-muted, #6b7280); }
+  </style>
+</head>
+<body class="maibot-page">
+  <main class="shell">
+    <header class="head">
+      <div>
+        <h1>小黑盒运营仪表盘</h1>
+        <p class="muted" id="subtitle">正在读取…</p>
+      </div>
+      <div class="row">
+        <button id="refresh" class="secondary" type="button">刷新</button>
+        <button id="check" type="button">立即检查通知/私信</button>
+        <button id="retry" class="secondary" type="button">重试失败</button>
+      </div>
+    </header>
+
+    <section class="grid">
+      <div class="card">
+        <h2>账号与插件</h2>
+        <div class="kv" id="account"></div>
+      </div>
+      <div class="card">
+        <h2>今日额度</h2>
+        <div class="kv" id="quotas"></div>
+      </div>
+      <div class="card">
+        <h2>动作队列</h2>
+        <div class="chips" id="queue"></div>
+      </div>
+      <div class="card">
+        <h2>私信</h2>
+        <div class="kv" id="dm"></div>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>最近动作</h2>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr><th>时间</th><th>类型</th><th>状态</th><th>目标</th><th>内容预览</th><th>错误</th></tr>
+          </thead>
+          <tbody id="recent"></tbody>
+        </table>
+      </div>
+      <p class="muted statusline" id="statusline"></p>
+    </section>
+  </main>
+
+  <script type="module">
+    const accountNode = document.querySelector('#account');
+    const quotasNode = document.querySelector('#quotas');
+    const queueNode = document.querySelector('#queue');
+    const dmNode = document.querySelector('#dm');
+    const recentNode = document.querySelector('#recent');
+    const subtitleNode = document.querySelector('#subtitle');
+    const statusNode = document.querySelector('#statusline');
+    const refreshButton = document.querySelector('#refresh');
+    const checkButton = document.querySelector('#check');
+    const retryButton = document.querySelector('#retry');
+
+    const STATUS_LABEL = {
+      planned: '计划中',
+      suppressed: '已抑制',
+      sending: '发送中',
+      verified: '已确认',
+      send_unknown: '结果未知',
+      failed: '失败',
+      dry_run: '演练',
+    };
+
+    function el(tag, cls, text) {
+      const node = document.createElement(tag);
+      if (cls) node.className = cls;
+      if (text !== undefined && text !== null) node.textContent = String(text);
+      return node;
+    }
+
+    function kv(parent, label, value) {
+      parent.append(el('span', '', label), el('span', '', value));
+    }
+
+    function fmtTime(seconds) {
+      if (!seconds) return '-';
+      const date = new Date(seconds * 1000);
+      return date.toLocaleString();
+    }
+
+    function renderAccount(data) {
+      const account = data.account || {};
+      const plugin = data.plugin || {};
+      accountNode.replaceChildren();
+      kv(accountNode, '运行状态', plugin.enabled ? '已启用' : '已停用');
+      kv(accountNode, '运行模式', plugin.mode === 'auto' ? 'auto（会真实发送）' : 'dry_run（只记录）');
+      kv(accountNode, '登录账号', account.logged_in ? (account.nickname || account.uid || '已登录') : '未登录');
+      kv(accountNode, '账号 UID', account.uid || '-');
+      kv(accountNode, '手动 Cookie', account.manual_cookie ? '已配置' : '未配置（走扫码）');
+    }
+
+    function renderQuotas(data) {
+      const today = data.today || {};
+      const limits = data.limits || {};
+      quotasNode.replaceChildren();
+      kv(quotasNode, '主动发帖', String(today.posts || 0) + ' / ' + String(limits.posts_per_day || 0));
+      kv(quotasNode, '主动评论', String(today.comments || 0) + ' / ' + String(limits.proactive_comments_per_day || 0));
+      kv(quotasNode, '点赞', String(today.likes || 0) + ' / ' + String(limits.likes_per_day || 0));
+      kv(quotasNode, '通知回复', String(today.replies || 0) + ' / ' + String(limits.notification_replies_per_day || 0));
+      kv(quotasNode, '私信回复', String(today.dm || 0) + ' / ' + String(limits.dm_daily_quota || 0));
+    }
+
+    function renderQueue(data) {
+      const counters = data.counters || {};
+      queueNode.replaceChildren();
+      ['planned', 'suppressed', 'sending', 'verified', 'send_unknown', 'failed', 'dry_run'].forEach(function (key) {
+        const chip = el('span', 'chip', STATUS_LABEL[key] + ' ');
+        chip.append(el('b', '', counters[key] || 0));
+        queueNode.append(chip);
+      });
+    }
+
+    function renderDm(data) {
+      const dm = data.direct_message || {};
+      dmNode.replaceChildren();
+      kv(dmNode, '启用', dm.enabled ? '是' : '否');
+      kv(dmNode, '模式', dm.mode === 'auto' ? 'auto' : 'dry_run');
+      kv(dmNode, '范围', dm.scope === 'blocklist' ? '除黑名单外全部' : '仅白名单');
+      kv(dmNode, '白名单 / 黑名单', String(dm.allowlist_size || 0) + ' / ' + String(dm.blocklist_size || 0));
+      kv(dmNode, '已归档私信', String(dm.message_count || 0) + (dm.baseline_ready ? '（基线已建立）' : '（待建基线）'));
+      kv(dmNode, '暂停剩余', dm.paused_remaining_seconds ? String(dm.paused_remaining_seconds) + ' 秒' : '无');
+    }
+
+    function renderRecent(data) {
+      const rows = Array.isArray(data.recent) ? data.recent : [];
+      recentNode.replaceChildren();
+      if (!rows.length) {
+        const tr = el('tr');
+        const td = el('td', 'empty', '还没有动作记录');
+        td.colSpan = 6;
+        tr.append(td);
+        recentNode.append(tr);
+        return;
+      }
+      rows.forEach(function (item) {
+        const tr = el('tr');
+        tr.append(el('td', 'nowrap', fmtTime(item.updated_at)));
+        tr.append(el('td', '', item.kind || '-'));
+        const statusCell = el('td', 'nowrap');
+        const status = String(item.status || '');
+        const cls = status === 'verified' ? 'ok' : (status === 'failed' ? 'bad' : (status === 'send_unknown' ? 'warn' : ''));
+        statusCell.append(el('span', cls, STATUS_LABEL[status] || status || '-'));
+        tr.append(statusCell);
+        tr.append(el('td', 'nowrap', item.post_id || item.target || '-'));
+        tr.append(el('td', '', item.preview || '-'));
+        tr.append(el('td', '', item.error || '-'));
+        recentNode.append(tr);
+      });
+    }
+
+    function render(data) {
+      const generated = data.generated_at ? fmtTime(data.generated_at) : '-';
+      const plugin = data.plugin || {};
+      subtitleNode.textContent = '更新于 ' + generated + ' · 模式 ' + (plugin.mode || '-') + ' · 档案 ' + (plugin.profile_id || '-');
+      renderAccount(data);
+      renderQuotas(data);
+      renderQueue(data);
+      renderDm(data);
+      renderRecent(data);
+    }
+
+    function setBusy(busy) {
+      [refreshButton, checkButton, retryButton].forEach(function (button) { button.disabled = busy; });
+    }
+
+    async function load() {
+      try {
+        render(await maibot.query('overview'));
+      } catch (error) {
+        subtitleNode.textContent = '读取失败';
+        statusNode.textContent = (error && error.message) || '仪表盘读取失败';
+      }
+    }
+
+    async function runAction(name) {
+      setBusy(true);
+      try {
+        const data = await maibot.action(name, {});
+        render(data);
+        const result = data.action_result || {};
+        statusNode.textContent = result.message || '操作完成';
+      } catch (error) {
+        statusNode.textContent = (error && error.message) || '操作失败';
+      } finally {
+        setBusy(false);
+      }
+    }
+
+    refreshButton.addEventListener('click', function () { load(); });
+    checkButton.addEventListener('click', function () { runAction('check_now'); });
+    retryButton.addEventListener('click', function () { runAction('retry_failed'); });
+
+    if (window.maibot) {
+      await maibot.ready;
+      await load();
+      window.setInterval(function () {
+        if (!document.hidden) load();
+      }, 5000);
+    } else {
+      subtitleNode.textContent = '未连接到 MaiBot WebUI（静态预览）';
+    }
+  </script>
+</body>
+</html>

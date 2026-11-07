@@ -2603,6 +2603,159 @@ class XiaoheiheOperatorPlugin(MaiBotPlugin):
         return True, f"小黑盒登录状态：{result.get('state', 'unknown')} {result.get('message', '')}", 2
 
 
+    # ── WebUI 仪表盘 ────────────────────────────────────────────
+
+    @API(
+        name="webui_dashboard",
+        description="读取小黑盒运营仪表盘：账号、队列、今日额度、私信状态与最近动作",
+        version="1",
+    )
+    async def api_webui_dashboard(self, **kwargs):
+        del kwargs
+        return self._dashboard_payload()
+
+    @API(
+        name="webui_check_now",
+        description="立即检查通知与私信（不触发主动发帖或巡帖）",
+        version="1",
+    )
+    async def api_webui_check_now(self, **kwargs):
+        del kwargs
+        if self._runtime is None:
+            return self._dashboard_action("check_now", False, "插件尚未加载")
+        if self._runtime.credentials is None:
+            return self._dashboard_action("check_now", False, "小黑盒尚未登录")
+        try:
+            await self._check_inbox_once()
+        except Exception as exc:  # noqa: BLE001
+            return self._dashboard_action(
+                "check_now", False, f"检查失败：{type(exc).__name__}"
+            )
+        return self._dashboard_action("check_now", True, "已检查通知与私信")
+
+    @API(
+        name="webui_retry_failed",
+        description="把失败的评论回复放回重试队列",
+        version="1",
+    )
+    async def api_webui_retry_failed(self, **kwargs):
+        del kwargs
+        count = self._requeue_failed_comments()
+        message = f"已把 {count} 条失败评论放回重试队列" if count else "没有可重试的失败评论"
+        return self._dashboard_action("retry_failed", True, message, {"count": count})
+
+    def _dashboard_action(
+        self, name: str, ok: bool, message: str, extra: dict[str, object] | None = None
+    ) -> dict[str, object]:
+        payload = self._dashboard_payload()
+        payload["action_result"] = {
+            "name": name,
+            "ok": bool(ok),
+            "message": message,
+            **(extra or {}),
+        }
+        return payload
+
+    def _dashboard_payload(self) -> dict[str, object]:
+        """WebUI 用的只读快照：全部字段都是短字符串/数字，避免泄露原文。"""
+
+        now = time.time()
+        credentials = self._runtime.credentials if self._runtime is not None else None
+        counters = {
+            "planned": 0,
+            "suppressed": 0,
+            "sending": 0,
+            "failed": 0,
+            "send_unknown": 0,
+            "verified": 0,
+            "dry_run": 0,
+        }
+        recent: list[dict[str, object]] = []
+        if self._store is not None:
+            rows = self._store.list_outgoing(limit=200)
+            for row in rows:
+                status = str(row.get("status") or "")
+                if status in counters:
+                    counters[status] += 1
+            for row in rows[:20]:
+                metadata = row.get("metadata") if isinstance(row.get("metadata"), dict) else {}
+                recent.append(
+                    {
+                        "action_key": str(row.get("action_key") or "")[:80],
+                        "kind": str(row.get("kind") or "")[:32],
+                        "status": str(row.get("status") or "")[:24],
+                        "target": str(row.get("target_id") or "")[:40],
+                        "post_id": str(metadata.get("post_id") or "")[:40],
+                        "error": str(row.get("error") or "")[:120],
+                        "preview": normalize_text(str(row.get("content") or ""), 60),
+                        "updated_at": int(float(row.get("updated_at") or 0)),
+                    }
+                )
+        today = self._day_start()
+        today_counts = {
+            "posts": self._store.count_since("proactive_post", today) if self._store else 0,
+            "comments": self._store.count_since("proactive_comment", today) if self._store else 0,
+            "likes": self._store.count_since("post_like", today) if self._store else 0,
+            "replies": self._store.count_since("notification_reply", today)
+            if self._store
+            else 0,
+            "dm": self._store.count_since("dm_reply", today) if self._store else 0,
+        }
+        dm_summary: dict[str, object] = {}
+        if self._dm_store is not None:
+            summary = self._dm_store.summary(self.config.profile_id)
+            dm_summary = {
+                "message_count": int(summary.get("message_count") or 0),
+                "baseline_ready": bool(summary.get("baseline_ready")),
+            }
+        return {
+            "generated_at": int(now),
+            "plugin": {
+                "enabled": bool(self.config.enabled),
+                "mode": str(self.config.mode),
+                "profile_id": str(self.config.profile_id),
+            },
+            "account": {
+                "logged_in": credentials is not None,
+                "nickname": str(credentials.nickname if credentials else ""),
+                "uid": str(credentials.uid if credentials else ""),
+                "manual_cookie": bool(str(self.config.manual_cookie or "").strip()),
+            },
+            "counters": counters,
+            "today": today_counts,
+            "limits": {
+                "posts_per_day": int(self.config.posts_per_day),
+                "proactive_comments_per_day": int(self.config.proactive_comments_per_day),
+                "likes_per_day": int(self.config.likes_per_day),
+                "notification_replies_per_day": int(self.config.notification_replies_per_day),
+                "dm_daily_quota": int(self.config.dm_daily_quota),
+            },
+            "direct_message": {
+                "enabled": bool(self.config.dm_enabled),
+                "mode": str(self.config.dm_mode),
+                "scope": str(self.config.dm_reply_scope),
+                "allowlist_size": len(list(self.config.dm_user_allowlist or [])),
+                "blocklist_size": len(list(self.config.dm_user_blocklist or [])),
+                "paused_remaining_seconds": max(0, int(self._dm_blocked_until - now)),
+                **dm_summary,
+            },
+            "recent": recent,
+        }
+
+    async def _check_inbox_once(self) -> None:
+        """Notifications + DMs only: what the dashboard button promises."""
+
+        if self._store is None or self._runtime is None or self._runtime.credentials is None:
+            return
+        client = await self._runtime.client()
+        await self._reconcile_unknowns(client)
+        await self._retry_suppressed_comments(client)
+        for event_type in (NotificationType.MENTION, NotificationType.REPLY):
+            await self._poll_notifications(client, event_type)
+        if self.config.dm_enabled:
+            self._last_dm_poll_at = time.time()
+            await self._poll_direct_messages(client)
+
     @Command(
         "xhh_help",
         description="可在 MaiBot 聊天中输入 /xhh_help，查看小黑盒插件的运维命令。",

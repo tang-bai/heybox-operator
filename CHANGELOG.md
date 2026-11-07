@@ -2,6 +2,14 @@
 
 本文件记录 heybox-operator（二次开发自 [HannJia/xiaoheihe-operator](https://github.com/HannJia/xiaoheihe-operator)）的变更，按时间倒序。
 
+## 2026-11-08（0.8.0：WebUI 运营仪表盘）
+
+- **新增 WebUI 页面「运营仪表盘」**（`webui/dashboard.html`）：账号/登录态、运行模式、今日额度（发帖/评论/点赞/通知回复/私信）、动作队列分布、私信状态与最近 20 条动作。
+- **两个操作按钮**：「立即检查通知/私信」（只跑通知与私信，不触发主动发帖，避免页面等待生图）、「重试失败」（把失败评论放回 `suppressed` 队列）。
+- **新增 API**：`webui_dashboard`、`webui_check_now`、`webui_retry_failed`；快照只返回短字段（内容预览截断 60 字），不暴露完整正文与 Cookie。
+- `webui.json` 注册第二个工作区页面；仪表盘每 5 秒自动刷新，页面隐藏时暂停。
+- 测试：新增 `tests/test_webui_dashboard.py`（6 个），全量 93 个用例通过。
+
 ## 2026-11-08（0.7.0：表情规范化 / 手动 Cookie / 运维命令 / 发帖预览）
 
 - **表情规范化**：新增 `emoji_catalog.py`，发送前把 `[cube_狗头]`、`[表情:笑哭]` 等别名映射成平台标准标识符；`cube_`/`bigemoji_` 命名空间里不认识的直接丢弃，非表情方括号原样保留。评论、私信、发帖四处出口统一调用。

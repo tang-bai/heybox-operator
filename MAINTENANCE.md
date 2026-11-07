@@ -1,4 +1,4 @@
-# 维护说明（本地维护版 0.7.0）
+# 维护说明（本地维护版 0.8.0）
 
 基线：[`1519160235/heybox-operator`](https://github.com/1519160235/heybox-operator) 的 `main`（2026-11-03 快照，上游为 [`HannJia/xiaoheihe-operator`](https://github.com/HannJia/xiaoheihe-operator) 0.5.0）。
 本目录是在该快照上做的一轮修复，已提交到 [`tang-bai/heybox-operator`](https://github.com/tang-bai/heybox-operator)（默认分支 `main`）。
@@ -56,10 +56,16 @@
 - **运维命令**：`/xhh_check`、`/xhh_retry`、`/xhh_clear_queue [帖子ID]`、`/xhh_help`；重试队列复用 `SUPPRESSED + manual_retry`，取消队列把动作置为 `cancelled_by_user` 并把对应通知标记为 `ignored`。
 - **发帖预览**：`/xhh_test 帖子ID` 只读帖子 + 生成 + 内容检查，不写库、不发送；模型输出 SKIP 时明确提示。
 - 验证：`tests/test_emoji_catalog.py`（7）、`tests/test_manual_cookie.py`（4）、`tests/test_admin_commands.py`（7）。
+### 7. WebUI 运营仪表盘（0.8.0）
+
+- `webui.json` 新增 `dashboard` 页（`webui/dashboard.html`），查询 `overview`，动作 `check_now` / `retry_failed`。
+- `plugin.py` 新增 `_dashboard_payload()`、`_check_inbox_once()` 与三个 `@API`；快照只返回短字段（内容预览截断 60 字），不暴露完整正文与 Cookie。
+- 「立即检查」只跑通知与私信，不触发主动发帖/生图，避免页面等待；仪表盘 5 秒自动刷新，页面隐藏时暂停。
+- 验证：`tests/test_webui_dashboard.py`（6 个，含 webui.json 与页面桥接断言）。
 ## 二、怎么验证
 
 ```powershell
-# 87 个用例（stdlib unittest，无需装依赖）
+# 93 个用例（stdlib unittest，无需装依赖）
 cd tests
 $env:PYTHONPATH = "<插件目录>;<插件目录>\tests"
 python -m unittest discover -s . -p "test_*.py"
@@ -68,7 +74,7 @@ python -m unittest discover -s . -p "test_*.py"
 python -m compileall -q .
 ```
 
-当前结果：`Ran 87 tests ... OK`。
+当前结果：`Ran 93 tests ... OK`。
 
 真机验收建议：
 

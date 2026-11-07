@@ -36,7 +36,8 @@
 | 社区搜索、帖子详情、用户资料/动态、话题、表情读取 | ❌ |
 | 收藏 / 关注 / 评论点赞 / 删帖 | ❌ |
 | 评论归档与统计、评论洞察、卡片渲染 | ❌（只有 `incoming_events` / `outgoing_actions` 两张流水表，没有查询与统计） |
-| 本地草稿箱、WebUI 仪表盘 | ❌（WebUI 只有登录页） |
+| 本地草稿箱 | ❌ |
+| WebUI 仪表盘 | ✅（0.8.0） |
 | 单帖回复上限、作者冷却、帖子去重 | ❌（只有全局额度/冷却） |
 | 运维命令 / 发帖预览 | ✅（0.7.0） |
 | 评论带图、评论图片的视觉上下文 | ❌ |
@@ -62,7 +63,7 @@
 
 7. **只读工具集**（MaiBot 的 `@Tool`）：`xhh_search`（帖子/用户/话题）、`xhh_get_post`、`xhh_get_user_profile`、`xhh_get_user_activity`、`xhh_get_topics`、`xhh_get_emojis`。需要给 `vendor_xiaoheihe` 补 4–6 个端点（search / user / topic index 已有部分）。
 8. **收藏 / 关注 / 评论点赞 / 删帖**：写操作，建议做成“默认关闭 + 每次确认”的独立开关，避免和自动运营混在一起。
-9. **WebUI 仪表盘**：把 `/xhh_status` 的内容做成页面（队列、最近 20 条动作、配额剩余、私信暂停状态），`webui.json` 加一个 `dashboard` 页即可。
+9. ✅ **WebUI 仪表盘**（0.8.0）：`webui/dashboard.html` 展示账号、今日额度、队列分布、私信状态与最近 20 条动作，并带「立即检查」「重试失败」两个按钮。
 10. **评论归档 + 统计**：`dm_store` 的思路复制一张 `comments` 表，收到/发出的评论都落库，再加一个查询命令；这是“评论洞察”的前置。
 11. **陌生人私信入口**：我们已有 `DIRECT_MESSAGE_HISTORY`（`/chat/stranger_messages/`）端点但没接入；加一条来源和开关即可。
 12. **评论带图**：参考的 `xhh_create_comment` 支持 `image_urls`，我们的 `send_comment` 固定不带图；要的话把 `imgs` 字段补进请求契约。

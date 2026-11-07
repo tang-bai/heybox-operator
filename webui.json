@@ -21,6 +21,28 @@
           "confirmation": "确认生成新的小黑盒登录二维码？"
         }
       }
+    },
+    {
+      "id": "dashboard",
+      "title": "运营仪表盘",
+      "placement": "workspace",
+      "mode": "custom",
+      "entry": "webui/dashboard.html",
+      "layout": "document",
+      "queries": {
+        "overview": {
+          "api": "webui_dashboard"
+        }
+      },
+      "actions": {
+        "check_now": {
+          "api": "webui_check_now"
+        },
+        "retry_failed": {
+          "api": "webui_retry_failed",
+          "confirmation": "确认把失败的评论回复放回重试队列？"
+        }
+      }
     }
   ]
 }
