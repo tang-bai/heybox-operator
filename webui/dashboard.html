@@ -73,7 +73,7 @@
       <div class="table-wrap">
         <table>
           <thead>
-            <tr><th>时间</th><th>类型</th><th>状态</th><th>目标</th><th>内容预览</th><th>错误</th></tr>
+            <tr><th>时间</th><th>类型</th><th>状态</th><th>目标 / link_id</th><th>内容预览</th><th>错误</th></tr>
           </thead>
           <tbody id="recent"></tbody>
         </table>
@@ -184,7 +184,8 @@
         const cls = status === 'verified' ? 'ok' : (status === 'failed' ? 'bad' : (status === 'send_unknown' ? 'warn' : ''));
         statusCell.append(el('span', cls, STATUS_LABEL[status] || status || '-'));
         tr.append(statusCell);
-        tr.append(el('td', 'nowrap', item.post_id || item.target || '-'));
+        const targetText = (item.post_id || item.target || '-') + (item.external_id ? ' → ' + item.external_id : '');
+        tr.append(el('td', 'nowrap', targetText));
         tr.append(el('td', '', item.preview || '-'));
         tr.append(el('td', '', item.error || '-'));
         recentNode.append(tr);

@@ -495,10 +495,23 @@ class XiaoheiheApiClient:
         # The reference mobile-web route returns the complete original post
         # when queried by link_id alone. A root-specific query may return a
         # narrowed comment tree, so keep the two sources separate and merge.
+        # The web client always sends page parameters; the short request can
+        # omit the post body (only returning comments) and then post readback
+        # looks like a mismatch even though the post exists.
+        base_params = {
+            "link_id": post_id,
+            "h_src": "",
+            "is_first": "1",
+            "page": "1",
+            "index": "1",
+            "limit": "20",
+            "sort_filter": "time",
+            "owner_only": "0",
+        }
         if post_context is None:
             post_response = await self._request(
                 EndpointName.POST_TREE,
-                params={"link_id": post_id, "h_src": ""},
+                params=dict(base_params),
             )
             try:
                 post_context = parse_thread_context(post_response.payload, post_id)
@@ -516,13 +529,11 @@ class XiaoheiheApiClient:
         if not root_comment_id:
             return post_context
 
+        thread_params = dict(base_params)
+        thread_params["root_comment_id"] = root_comment_id
         thread_response = await self._request(
             EndpointName.POST_TREE,
-            params={
-                "link_id": post_id,
-                "root_comment_id": root_comment_id,
-                "h_src": "",
-            },
+            params=thread_params,
         )
         try:
             thread_context = parse_thread_context(thread_response.payload, post_id)

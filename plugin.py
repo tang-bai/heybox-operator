@@ -2485,7 +2485,22 @@ class XiaoheiheOperatorPlugin(MaiBotPlugin):
             ):
                 self._store.update_outgoing(action_key, OutgoingStatus.VERIFIED, external_id=link_id)
             else:
-                self._store.update_outgoing(action_key, OutgoingStatus.SEND_UNKNOWN, external_id=link_id, error="readback_not_found")
+                observed_title = normalize_text(str(getattr(context, "title", "")), 100)
+                observed_body = normalize_text(str(getattr(context, "body", "")), 320)
+                self.ctx.logger.warning(
+                    "小黑盒发帖读回不匹配：link_id=%s observed_title=%r observed_body=%r expected_title=%r expected_body=%r",
+                    link_id,
+                    observed_title[:40],
+                    observed_body[:60],
+                    normalize_text(title, 40),
+                    normalize_text(body, 60),
+                )
+                self._store.update_outgoing(
+                    action_key,
+                    OutgoingStatus.SEND_UNKNOWN,
+                    external_id=link_id,
+                    error="readback_not_found",
+                )
         except Exception as exc:  # noqa: BLE001
             category = str(getattr(exc, "category", ""))
             label = _error_label(exc)
@@ -2836,6 +2851,7 @@ class XiaoheiheOperatorPlugin(MaiBotPlugin):
                         "status": str(row.get("status") or "")[:24],
                         "target": str(row.get("target_id") or "")[:40],
                         "post_id": str(metadata.get("post_id") or "")[:40],
+                        "external_id": str(row.get("external_id") or "")[:40],
                         "error": str(row.get("error") or "")[:120],
                         "preview": normalize_text(str(row.get("content") or ""), 60),
                         "updated_at": int(float(row.get("updated_at") or 0)),
@@ -2970,7 +2986,8 @@ class XiaoheiheOperatorPlugin(MaiBotPlugin):
             return True, f"发帖成功：link_id={row.get('external_id') or '-'}", 2
         if status == OutgoingStatus.DRY_RUN.value:
             return True, "dry_run：已生成草稿但未发送（切 auto 后会真的发）", 2
-        return False, f"发帖未确认：{status} | {row.get('error') or ''}", 2
+        link_id = str(row.get("external_id") or "")
+        return False, f"发帖未确认：{status} | {row.get('error') or ''} | link_id={link_id or '-'}", 2
 
     @Command(
         "xhh_help",

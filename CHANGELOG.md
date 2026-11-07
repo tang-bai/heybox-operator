@@ -2,6 +2,14 @@
 
 本文件记录 heybox-operator（二次开发自 [HannJia/xiaoheihe-operator](https://github.com/HannJia/xiaoheihe-operator)）的变更，按时间倒序。
 
+## 2026-11-08（0.9.6：修复发帖读回只拿到评论的问题）
+
+- **帖子树请求补全网页端参数**：`fetch_thread_context()` 现在发送 `is_first=1`、`page/index/limit`、`sort_filter=time`、`owner_only=0`。短请求（只有 `link_id`）可能只返回评论、不带帖子正文，导致发帖读回误判 `readback_not_found`。
+- **读回不匹配写日志**：`_create_proactive_post()` 在标题/正文不一致时打印 `link_id`、读回标题/正文与期望值（各截断），便于判断是平台改写还是帖子不存在。
+- **`/xhh_post_now` 显示 link_id**：未确认时返回 `... | link_id=xxx`，可直接打开帖子核对。
+- **仪表盘最近动作**新增 `external_id` 列（目标 → link_id），方便定位发帖记录。
+- 测试：新增 `tests/test_post_tree_contract.py`（1 个），全量 117 个通过。
+
 ## 2026-11-08（0.9.5：新增 /xhh_post_now 手动发帖诊断）
 
 - 新增 `/xhh_post_now`（操作员权限）：立即走一遍主动发帖流程，**忽略发帖时间窗**，仍遵守 `dry_run`；返回 `verified` / `dry_run` / 具体错误标签，便于排查 `proactive_post` 被拒原因，不用等到第二天。
