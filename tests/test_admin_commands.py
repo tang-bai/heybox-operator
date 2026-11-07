@@ -202,6 +202,25 @@ class AdminCommandTests(unittest.TestCase):
             self.assertIn("session_id=session-1", text)
             plugin._store.close()
 
+    def test_whoami_matches_host_permission(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            plugin = self._plugin(Path(tmp))
+
+            class _Config:
+                async def get(self, key, default=None):
+                    if key == "plugin.permission":
+                        return ["qq:1249922508"]
+                    return default
+
+            plugin.ctx = SimpleNamespace(logger=_Logger(), config=_Config())
+            ok, text, _ = asyncio.run(
+                plugin.handle_whoami_command(platform="qq", user_id="1249922508")
+            )
+            self.assertTrue(ok)
+            self.assertIn("host_permission=['qq:1249922508']", text)
+            self.assertIn("matched=True", text)
+            plugin._store.close()
+
     def test_check_command_runs_one_poll(self):
         with tempfile.TemporaryDirectory() as tmp:
             plugin = self._plugin(Path(tmp))

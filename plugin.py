@@ -2873,13 +2873,29 @@ class XiaoheiheOperatorPlugin(MaiBotPlugin):
             kwargs.get("session_id") or kwargs.get("stream_id") or ""
         ).strip()
         scoped = f"{platform.lower()}:{user_id}" if platform and user_id else "(缺失)"
+        host_permission: list[str] = []
+        try:
+            raw_permission = await self.ctx.config.get("plugin.permission", [])
+        except Exception:  # noqa: BLE001
+            raw_permission = []
+        if isinstance(raw_permission, (list, tuple, set)):
+            host_permission = [
+                str(item).strip() for item in raw_permission if str(item).strip()
+            ]
+        matched = bool(scoped) and scoped in host_permission
         text = (
             f"platform={platform or '-'}\n"
             f"user_id={user_id or '-'}\n"
             f"platform:id={scoped}\n"
             f"session_id={session_id or '-'}\n"
             f"is_local_operator={bool(kwargs.get('is_local_operator'))}\n"
-            "把 platform:id 填进 config/bot_config.toml 的 [plugin] permission 即可获得操作员权限。"
+            f"host_permission={host_permission or '[]'}\n"
+            f"matched={matched}\n"
+            + (
+                "已经命中操作员列表；如果命令仍被拒绝，请重启 MaiBot 或确认运行的是这份配置。"
+                if matched
+                else "把上面的 platform:id 原样写进 config/bot_config.toml 的 [plugin] permission，然后重启 MaiBot。"
+            )
         )
         return True, text, 2
 

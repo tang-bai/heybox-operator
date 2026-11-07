@@ -2,6 +2,12 @@
 
 本文件记录 heybox-operator（二次开发自 [HannJia/xiaoheihe-operator](https://github.com/HannJia/xiaoheihe-operator)）的变更，按时间倒序。
 
+## 2026-11-08（0.9.2：/xhh_whoami 增加宿主权限回显）
+
+- `/xhh_whoami` 现在会通过 `ctx.config.get("plugin.permission")` 回显 MaiBot **实际加载到的操作员列表**，并给出 `matched=True/False`。
+- 用于区分「配置没写对/没加载」和「平台前缀不匹配」：`matched=True` 仍被拒 → 重启或确认运行的是这份配置；`host_permission=[]` → 值没进 `[plugin]` 段。
+- 测试：`tests/test_admin_commands.py` 补 1 个用例，全量 104 个通过。
+
 ## 2026-11-08（0.9.1：新增 /xhh_whoami 权限诊断）
 
 - 新增 `/xhh_whoami`（**不需要操作员权限**）：回显 `platform`、`user_id`、`platform:id`、`session_id`，用于把账号正确填进 `config/bot_config.toml` 的 `[plugin] permission` 或某条命令的 `allow_users`。
