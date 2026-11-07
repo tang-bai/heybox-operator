@@ -520,6 +520,12 @@ class XiaoheiheContentSection(PluginConfigBase):
         order=6,
         default="org.mai-mai.self-identity.get_default_reference_image",
     )
+    post_summarize_feed: bool = _ui_field(
+        label="发帖总结今天刷到的帖子",
+        hint="开启后发帖会读取今天逛过的帖子（不够时临时拉一次推荐流），让模型总结并挑一两篇评论；关闭则只按人设和生活轨迹生成。标题只作为素材，不会照抄。",
+        order=7,
+        default=True,
+    )
 
 
 class XiaoheiheDirectMessageSection(PluginConfigBase):
@@ -735,6 +741,10 @@ class XiaoheiheConfig(PluginConfigBase):
     @property
     def identity_reference_api(self) -> str:
         return self.content.identity_reference_api
+
+    @property
+    def post_summarize_feed(self) -> bool:
+        return bool(self.content.post_summarize_feed)
 
     @property
     def post_topic_ids(self) -> list[str]:
@@ -1041,6 +1051,14 @@ class XiaoheiheOperatorPlugin(MaiBotPlugin):
         except Exception:
             pass
         return None
+
+    def _log_debug(self, message: str, *args: object) -> None:
+        """Some hosts/tests provide a logger without debug(); degrade quietly."""
+
+        logger = getattr(self.ctx, "logger", None)
+        log = getattr(logger, "debug", None)
+        if callable(log):
+            log(message, *args)
 
     async def _persona_identity(self) -> str:
         """生成内容用的人设：插件里单独填写的优先，否则跟随宿主 MaiBot 的昵称和人格。"""
@@ -2116,6 +2134,82 @@ class XiaoheiheOperatorPlugin(MaiBotPlugin):
         )
         return True
 
+    @staticmethod
+    def _feed_community(item: dict[str, object]) -> str:
+        names = item.get("section_names")
+        if isinstance(names, list):
+            for value in names:
+                text = str(value or "").strip()
+                if text:
+                    return text[:40]
+        for key in ("community_name", "topic_name", "section_name"):
+            text = str(item.get(key) or "").strip()
+            if text:
+                return text[:40]
+        return ""
+
+    def _record_seen_post(self, item: dict[str, object], context: object) -> None:
+        """Remember what the account just read, for the daily summary post."""
+
+        if self._store is None:
+            return
+        post_id = str(item.get("post_id") or item.get("link_id") or "")
+        title = str(
+            getattr(context, "title", "") or item.get("title") or item.get("subject") or ""
+        )
+        body = str(
+            getattr(context, "body", "") or item.get("content") or item.get("description") or ""
+        )
+        if not post_id or not normalize_text(title):
+            return
+        self._store.record_seen_post(
+            post_id,
+            title=normalize_text(title, 100),
+            excerpt=normalize_text(body, 160),
+            community=self._feed_community(item),
+        )
+
+    async def _seen_posts_for_post(self, client) -> list[dict[str, str]]:
+        """Today's opened posts; top up from the feed when there are too few."""
+
+        if self._store is None or not self.config.post_summarize_feed:
+            return []
+        seen = self._store.list_seen_posts_since(self._day_start(), limit=6)
+        if len(seen) >= 2:
+            return seen
+        fetch_feed = getattr(client, "fetch_feed", None)
+        if fetch_feed is None:
+            return seen
+        try:
+            page = await fetch_feed(offset=0)
+        except Exception as exc:  # noqa: BLE001
+            self._log_debug("发帖前补拉推荐流失败：%s", type(exc).__name__)
+            return seen
+        merged = list(seen)
+        known = {str(item.get("post_id") or "") for item in seen}
+        for item in page.items:
+            if len(merged) >= 6:
+                break
+            if not isinstance(item, dict) or self._is_own_feed_item(item):
+                continue
+            post_id = str(item.get("post_id") or item.get("link_id") or "")
+            title = normalize_text(str(item.get("title") or item.get("subject") or ""), 80)
+            if not post_id or not title or post_id in known:
+                continue
+            merged.append(
+                {
+                    "post_id": post_id,
+                    "title": title,
+                    "excerpt": normalize_text(
+                        str(item.get("content") or item.get("description") or ""), 120
+                    ),
+                    "community": self._feed_community(item),
+                    "seen_at": time.time(),
+                }
+            )
+            known.add(post_id)
+        return merged
+
     async def _browse_session(self, client) -> None:
         """像人一样逛一次推荐流：点开几篇看，大多只看不评，偶尔点赞，最多评论一条。"""
 
@@ -2138,6 +2232,7 @@ class XiaoheiheOperatorPlugin(MaiBotPlugin):
                 self.ctx.logger.debug("小黑盒帖子打开失败：%s", type(exc).__name__)
                 continue
             opened += 1
+            self._record_seen_post(item, context)
             await self._pause(8, 40)
             if not self._feed_candidate(item):
                 continue
@@ -2205,6 +2300,7 @@ class XiaoheiheOperatorPlugin(MaiBotPlugin):
         topic_id_value = ",".join(topic_ids)
         if not self._cooldown_ready():
             return
+        seen_post_ids: list[str] = []
         retry_row = next(
             (
                 row
@@ -2227,14 +2323,20 @@ class XiaoheiheOperatorPlugin(MaiBotPlugin):
             self.ctx.logger.info("小黑盒主动帖准备重试同一条发送前失败动作：%s", action_key[:28])
         else:
             life_context = await self._persona.life_context()
+            seen_posts = await self._seen_posts_for_post(client)
+            seen_post_ids = [str(item.get("post_id") or "") for item in seen_posts]
             first_post = self._store.count_since("proactive_post", 0) == 0
-            # 首帖给个轻松的自我介绍方向，之后不限定内容方向，由人设和生活轨迹自由发挥
+            # 有今天刷到的帖子就优先总结；没有才用首帖自我介绍方向。
             topic_hint = (
                 "刚来小黑盒，轻松介绍一下自己，语气自然像刚来报到"
-                if first_post
+                if first_post and not seen_posts
                 else ""
             )
-            draft = await self._generator.post(life_context=life_context, topic_hint=topic_hint)
+            draft = await self._generator.post(
+                life_context=life_context,
+                topic_hint=topic_hint,
+                seen_posts=seen_posts,
+            )
             if not draft:
                 return
             title, body = draft
@@ -2256,6 +2358,7 @@ class XiaoheiheOperatorPlugin(MaiBotPlugin):
                 "fingerprint": fingerprint,
                 "topic_ids": topic_id_value,
                 "image_required": bool(self.config.generate_post_images),
+                "seen_post_ids": [item for item in seen_post_ids if item],
             },
         )
         if not self._store.begin_outgoing(action):

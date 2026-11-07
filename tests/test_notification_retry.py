@@ -76,6 +76,9 @@ class _Logger:
     def error(self, *args, **kwargs):
         pass
 
+    def debug(self, *args, **kwargs):
+        pass
+
 
 class _Generator:
     async def reply(self, **kwargs):

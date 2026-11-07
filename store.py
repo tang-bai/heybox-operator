@@ -61,6 +61,14 @@ class OperatorStore:
             );
             CREATE INDEX IF NOT EXISTS idx_outgoing_status ON outgoing_actions(status);
             CREATE INDEX IF NOT EXISTS idx_outgoing_created ON outgoing_actions(created_at);
+            CREATE TABLE IF NOT EXISTS seen_posts (
+                post_id TEXT PRIMARY KEY,
+                title TEXT NOT NULL,
+                excerpt TEXT NOT NULL DEFAULT '',
+                community TEXT NOT NULL DEFAULT '',
+                seen_at REAL NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_seen_posts_seen ON seen_posts(seen_at DESC);
             """
         )
         columns = {str(row[1]) for row in self._conn.execute("PRAGMA table_info(incoming_events)")}
@@ -362,6 +370,57 @@ class OperatorStore:
         )
         row = self._conn.execute(query, tuple(params)).fetchone()
         return float(row["updated_at"]) if row else None
+
+    def record_seen_post(
+        self,
+        post_id: str,
+        *,
+        title: str,
+        excerpt: str = "",
+        community: str = "",
+        seen_at: float | None = None,
+    ) -> None:
+        """Remember one post the account actually opened today."""
+
+        safe_id = str(post_id or "").strip()
+        safe_title = str(title or "").strip()
+        if not safe_id or not safe_title:
+            return
+        now = time.time() if seen_at is None else float(seen_at)
+        self._conn.execute(
+            """
+            INSERT INTO seen_posts(post_id, title, excerpt, community, seen_at)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(post_id) DO UPDATE SET
+              title=excluded.title,
+              excerpt=excluded.excerpt,
+              community=excluded.community,
+              seen_at=excluded.seen_at
+            """,
+            (
+                safe_id,
+                safe_title[:120],
+                str(excerpt or "")[:200],
+                str(community or "")[:60],
+                now,
+            ),
+        )
+        # Keep the table small: only the last week can feed a "today" summary.
+        self._conn.execute("DELETE FROM seen_posts WHERE seen_at < ?", (now - 7 * 24 * 60 * 60,))
+        self._conn.commit()
+
+    def list_seen_posts_since(self, since: float, *, limit: int = 8) -> list[dict[str, Any]]:
+        rows = self._conn.execute(
+            """
+            SELECT post_id, title, excerpt, community, seen_at
+            FROM seen_posts
+            WHERE seen_at >= ?
+            ORDER BY seen_at DESC
+            LIMIT ?
+            """,
+            (float(since), max(1, min(int(limit), 50))),
+        ).fetchall()
+        return [dict(row) for row in rows]
 
     def has_outgoing_key(self, action_key: str) -> bool:
         row = self._conn.execute(
