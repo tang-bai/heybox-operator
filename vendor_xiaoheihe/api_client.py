@@ -582,12 +582,22 @@ class XiaoheiheApiClient:
     ) -> dict[str, Any]:
         """创建图文/文章帖子；发送结果必须由调用方继续读回核验。"""
 
+        first_text = ""
+        for item in content_blocks:
+            if str(item.get("type") or "").lower() != "text":
+                continue
+            first_text = str(item.get("text") or "").strip()
+            if first_text:
+                break
+        # 动态分区由 topic_id 决定：默认综合区 58144 用 28，其它真实分区用 27。
+        # 用错会返回「错误的动态分区」，和正文有没有图片无关。
+        link_tag = "28" if str(topic_ids).strip() == "58144" else "27"
         form: dict[str, Any] = {
             "title": str(title).strip(),
-            "desc": "",
+            "desc": first_text[:100] or str(title).strip()[:100],
             "text": json.dumps(content_blocks, ensure_ascii=False),
             "post_type": "1",
-            "link_tag": "27" if any(_block_is_image(item) for item in content_blocks) else "28",
+            "link_tag": link_tag,
             "draft": "1" if draft else "0",
             "view_limit": "1",
             "original": "1",

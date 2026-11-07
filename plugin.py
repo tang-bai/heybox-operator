@@ -562,6 +562,12 @@ class XiaoheiheContentSection(PluginConfigBase):
         order=8,
         default=True,
     )
+    host_replyer_stream_id: str = _ui_field(
+        label="宿主 Replyer 聊天流 ID（可选）",
+        hint="留空时插件会创建一个 internal 会话给 Replyer 用；如果宿主适配器策略拒绝，可在这里填一个已存在的聊天流 ID。",
+        order=9,
+        default="",
+    )
 
 
 class XiaoheiheDirectMessageSection(PluginConfigBase):
@@ -785,6 +791,10 @@ class XiaoheiheConfig(PluginConfigBase):
     @property
     def use_host_replyer(self) -> bool:
         return bool(self.content.use_host_replyer)
+
+    @property
+    def host_replyer_stream_id(self) -> str:
+        return str(self.content.host_replyer_stream_id or "").strip()
 
     @property
     def summary_enabled(self) -> bool:
@@ -1038,6 +1048,7 @@ class XiaoheiheOperatorPlugin(MaiBotPlugin):
             account_id=str(self._runtime.credentials.uid)
             if self._runtime.credentials
             else "",
+            stream_id=str(self.config.host_replyer_stream_id or ""),
         )
         self._generator = ContentGenerator(
             self.ctx.llm,

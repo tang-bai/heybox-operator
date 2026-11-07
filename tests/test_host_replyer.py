@@ -45,12 +45,19 @@ class HostReplyerTests(unittest.TestCase):
         self.assertEqual(first, "来自宿主的文本")
         self.assertEqual(second, "来自宿主的文本")
         self.assertEqual(len(ctx.chat.calls), 1)
-        self.assertEqual(ctx.chat.calls[0]["platform"], "xiaoheihe")
+        self.assertEqual(ctx.chat.calls[0]["platform"], "internal")
         self.assertEqual(ctx.chat.calls[0]["group_id"], "xiaoheihe-operator:default")
         name, kwargs = ctx.calls[0]
         self.assertEqual(name, "maisaka.reply.generate")
         self.assertEqual(kwargs["stream_id"], "stream-1")
         self.assertEqual(kwargs["format_instruction"], "只输出正文")
+
+    def test_existing_stream_skips_session_creation(self):
+        ctx = _Ctx()
+        replyer = HostReplyer(ctx, stream_id="existing-stream")
+        asyncio.run(replyer.generate(reference="材料", format_instruction="x"))
+        self.assertEqual(ctx.chat.calls, [])
+        self.assertEqual(ctx.calls[0][1]["stream_id"], "existing-stream")
 
     def test_failed_capability_raises(self):
         ctx = _Ctx(result={"success": False, "error": "未找到已存在的聊天流"})

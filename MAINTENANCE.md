@@ -86,10 +86,16 @@
 - 配置 `use_host_replyer` 默认开，`on_config_update` 会重建 generator 以切换链路。
 - 能力声明在 `_manifest.json`：`chat.open_session`、`maisaka.reply.generate`；旧宿主缺少能力时日志会出现「宿主 Replyer 不可用，本次回退到插件模型」。
 - 验证：`tests/test_host_replyer.py`（7 个）。
+### 11. 动态分区与 Replyer 会话策略（0.12.0）
+
+- `create_post()`：`link_tag = "28" if topic_ids == "58144" else "27"`（与 xhhrobot / xiaoheihe_adapter 一致）；`desc` 取第一段正文前 100 字。
+- `HostReplyer` 默认用 `platform="internal"` 建会话（宿主心流只对 `internal/webui` 与本地控制台放行适配器策略）；新增 `host_replyer_stream_id` 可指定已有流。
+- 真机日志：`适配器名单禁止创建聊天运行实例` 应消失；若仍出现，填 `host_replyer_stream_id`。
+- 验证：`tests/test_post_form.py`（2 个）+ `tests/test_host_replyer.py`（8 个）。
 ## 二、怎么验证
 
 ```powershell
-# 131 个用例（stdlib unittest，无需装依赖）
+# 134 个用例（stdlib unittest，无需装依赖）
 cd tests
 $env:PYTHONPATH = "<插件目录>;<插件目录>\tests"
 python -m unittest discover -s . -p "test_*.py"
@@ -98,7 +104,7 @@ python -m unittest discover -s . -p "test_*.py"
 python -m compileall -q .
 ```
 
-当前结果：`Ran 131 tests ... OK`。
+当前结果：`Ran 134 tests ... OK`。
 
 真机验收建议：
 

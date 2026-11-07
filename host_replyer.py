@@ -20,15 +20,17 @@ class HostReplyer:
         self,
         ctx: Any,
         *,
-        platform: str = "xiaoheihe",
+        platform: str = "internal",
         profile_id: str = "default",
         account_id: str = "",
+        stream_id: str = "",
     ) -> None:
         self.ctx = ctx
         self.platform = platform
         self.profile_id = profile_id
         self.account_id = account_id
-        self._stream_id = ""
+        # 允许直接指定已有聊天流（宿主适配器策略限制时用）。
+        self._stream_id = str(stream_id or "").strip()
 
     async def ensure_stream(self) -> str:
         if self._stream_id:

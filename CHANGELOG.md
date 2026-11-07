@@ -2,6 +2,13 @@
 
 本文件记录 heybox-operator（二次开发自 [HannJia/xiaoheihe-operator](https://github.com/HannJia/xiaoheihe-operator)）的变更，按时间倒序。
 
+## 2026-11-08（0.12.0：修复动态分区与 Replyer 会话策略）
+
+- **修复发帖「错误的动态分区」**：`link_tag` 不再按正文有没有图片决定，而是由分区决定——默认综合区 `58144` 用 `28`，其它真实分区用 `27`；`desc` 改为第一段正文前 100 字（原来为空）。
+- **修复宿主 Replyer「适配器名单禁止创建聊天运行实例」**：插件创建的会话平台改为 `internal`（宿主心流对 `internal/webui` 放行），不再用 `xiaoheihe` 平台去撞适配器策略。
+- 新增配置「宿主 Replyer 聊天流 ID（可选）」：如果宿主仍拒绝，可以直接填一个已存在的聊天流 ID，插件跳过 `open_session`。
+- 测试：新增 `tests/test_post_form.py`（2 个），补充宿主流测试，全量 134 个通过。
+
 ## 2026-11-08（0.11.0：接入宿主 Replyer 生成）
 
 - 新增 `host_replyer.py`：通过 `chat.open_session` 创建（或复用）`xiaoheihe-operator:<profile>` 聊天流，再调用宿主能力 `maisaka.reply.generate`，复用 MaiBot 的**人格、记忆、表达选择与 Hook** 生成文本。

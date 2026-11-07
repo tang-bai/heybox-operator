@@ -70,6 +70,7 @@
 | 发帖社区 / 话题标签 | 社区是真实版块，话题是 `#标签`，可自定义 |
 | 浏览总结 `summary_*` | 开关、触发方式（count/interval/either）、每 N 帖、每 N 小时；发布到上面的「发帖社区」 |
 | 生成链路 `use_host_replyer` | 默认开：走宿主 Replyer（人格/记忆/Hook）；失败自动回退插件模型 |
+| Replyer 聊天流 `host_replyer_stream_id` | 可选：宿主适配器策略拒绝时，填一个已存在的聊天流 ID |
 | 发帖素材 `post_summarize_feed` | 旧版简版总结开关（总结开关开启后不再生效） |
 | 生图 API | OpenAI 兼容 `/images/generations`；留空尝试读 MaiBot「画图」provider |
 | 生活轨迹 | 读「生活频率」的 `life_state.json`，睡觉时不逛不发 |
