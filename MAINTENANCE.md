@@ -1,4 +1,4 @@
-# 维护说明（本地维护版 0.6.1）
+# 维护说明（本地维护版 0.7.0）
 
 基线：[`1519160235/heybox-operator`](https://github.com/1519160235/heybox-operator) 的 `main`（2026-11-03 快照，上游为 [`HannJia/xiaoheihe-operator`](https://github.com/HannJia/xiaoheihe-operator) 0.5.0）。
 本目录是在该快照上做的一轮修复，已提交到 [`tang-bai/heybox-operator`](https://github.com/tang-bai/heybox-operator)（默认分支 `main`）。
@@ -49,10 +49,17 @@
 - `tests/test_plugin_loading.py`：默认值断言从 `["Steam", "PC 游戏"]` 更新为二创后的空目标。
 - `_manifest.json`：版本 `0.5.0 → 0.5.1`，便于和上游/未修复构建区分；`id`、`author`、`urls` 未改（见下方「未改动项」）。
 
+### 6. A 级运维能力（0.7.0）
+
+- **表情规范化**（`emoji_catalog.py`）：发送前统一把 `[cube_狗头]` / `[表情:笑哭]` 转成标准标识符，未知表情丢弃，非表情方括号保留；评论、私信、发帖四处出口都调用 `normalize_outgoing_text()`。
+- **手动 Cookie 登录**：`basic.manual_cookie` + `XiaoheiheRuntime.apply_manual_cookie()`；校验 `user_pkey`、写凭据、换客户端；`on_load` 和 `on_config_update` 都会应用，失败只告警不影响扫码凭据。
+- **运维命令**：`/xhh_check`、`/xhh_retry`、`/xhh_clear_queue [帖子ID]`、`/xhh_help`；重试队列复用 `SUPPRESSED + manual_retry`，取消队列把动作置为 `cancelled_by_user` 并把对应通知标记为 `ignored`。
+- **发帖预览**：`/xhh_test 帖子ID` 只读帖子 + 生成 + 内容检查，不写库、不发送；模型输出 SKIP 时明确提示。
+- 验证：`tests/test_emoji_catalog.py`（7）、`tests/test_manual_cookie.py`（4）、`tests/test_admin_commands.py`（7）。
 ## 二、怎么验证
 
 ```powershell
-# 69 个用例（stdlib unittest，无需装依赖）
+# 87 个用例（stdlib unittest，无需装依赖）
 cd tests
 $env:PYTHONPATH = "<插件目录>;<插件目录>\tests"
 python -m unittest discover -s . -p "test_*.py"
@@ -61,7 +68,7 @@ python -m unittest discover -s . -p "test_*.py"
 python -m compileall -q .
 ```
 
-当前结果：`Ran 69 tests ... OK`。
+当前结果：`Ran 87 tests ... OK`。
 
 真机验收建议：
 
@@ -71,6 +78,8 @@ python -m compileall -q .
 4. 私信：把「启用私信功能」打开、`私信运行模式` 先用 `dry_run`、「私信回复范围」选「仅白名单」、白名单填 1 个自己的小号 UID（黑名单可以先放一个不相关 UID 验证优先级），给小号发一条私信；日志出现 `小黑盒私信历史基线已建立` 说明收件箱通了，再发一条应出现 `小黑盒私信回复处于 dry_run，已记录草稿未发送`；切 `auto` 后应出现 `小黑盒私信已发送并经服务端确认`。
 5. 配图：打开「私信回复配图」，成功后审计表 metadata 里 `image_attached=true`，小黑盒里能看到图文私信；失败会打 `小黑盒私信配图失败，已降级为纯文字`，回复照常发出。
 6. 如果日志出现 `小黑盒私信收件箱读取失败`，先看 `probe=` 后面的字段名，多半是会话列表的响应结构变了（`docs/xiaoheihe-api-contract.md` 记录了期望形状）。
+7. 运维命令：聊天里发 `/xhh_check` 应立即跑一轮并在回复里给出待重试/失败条数；`/xhh_retry` 后日志会看到 `manual_retry` 动作被重新发送；`/xhh_clear_queue <帖子ID>` 后审计表对应动作变成 `cancelled_by_user`；`/xhh_test <帖子ID>` 只返回预览文本，小黑盒上不会出现新评论。
+8. 手动 Cookie：清空扫码凭据后只填 `manual_cookie`，重启插件日志应出现 `小黑盒已使用手动 Cookie 登录`；Cookie 里没有 `user_pkey` 时会告警 `Cookie 缺少 user_pkey` 并继续用旧凭据。
 
 ## 三、没有改动的项（仍建议关注）
 

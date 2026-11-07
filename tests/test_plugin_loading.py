@@ -72,6 +72,7 @@ def test_plugin_module_loads_with_runner_sdk_surface():
     assert config.dm.dm_user_allowlist == []
     assert config.dm.dm_user_blocklist == []
     assert config.dm.dm_generate_images is False
+    assert config.basic.manual_cookie == ""
     # 二创把发帖目标拆成「社区」+「话题标签」两个下拉框，默认留空（不自动发帖）。
     assert config.automation.post_target_primary == ""
     assert config.automation.post_target_secondary == ""

@@ -2,6 +2,14 @@
 
 本文件记录 heybox-operator（二次开发自 [HannJia/xiaoheihe-operator](https://github.com/HannJia/xiaoheihe-operator)）的变更，按时间倒序。
 
+## 2026-11-08（0.7.0：表情规范化 / 手动 Cookie / 运维命令 / 发帖预览）
+
+- **表情规范化**：新增 `emoji_catalog.py`，发送前把 `[cube_狗头]`、`[表情:笑哭]` 等别名映射成平台标准标识符；`cube_`/`bigemoji_` 命名空间里不认识的直接丢弃，非表情方括号原样保留。评论、私信、发帖四处出口统一调用。
+- **手动 Cookie 登录**：`基础设置` 新增「手动 Cookie（可选）」。`XiaoheiheRuntime.apply_manual_cookie()` 解析 Cookie 头、校验 `user_pkey`、写入凭据目录并替换客户端；留空仍走扫码。
+- **运维命令**：`/xhh_check`（立即一轮检查）、`/xhh_retry`（失败评论放回重试队列）、`/xhh_clear_queue [帖子ID]`（取消待发送评论）、`/xhh_help`（命令列表）。原 `_retry_cooldown_comments` 改名 `_retry_suppressed_comments`，同时消费 `cooldown` 与 `manual_retry`。
+- **发帖预览**：`/xhh_test 帖子ID` 读取帖子并生成一条回复，只返回文本、不写库、不发送，方便调人设。
+- 测试：新增 `tests/test_emoji_catalog.py`（7 个）、`tests/test_manual_cookie.py`（4 个）、`tests/test_admin_commands.py`（7 个），全量 87 个用例通过。
+
 ## 2026-11-08（0.6.1：私信白/黑名单与配图）
 
 - **私信回复范围**：新增下拉 `dm_reply_scope`（`allowlist` / `blocklist`）。黑名单优先级最高；选「除黑名单外全部」时无需维护白名单。

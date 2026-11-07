@@ -5,17 +5,34 @@ import json
 import os
 import time
 from dataclasses import asdict
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 try:
     from .vendor_xiaoheihe.api_client import XiaoheiheApiClient
     from .vendor_xiaoheihe.models import Credentials, LoginState, QRLoginSession
-    from .vendor_xiaoheihe.security import secure_unlink, validate_profile_id
+    from .vendor_xiaoheihe.request_signing import (
+        ensure_client_identity,
+        generate_device_id,
+    )
+    from .vendor_xiaoheihe.security import (
+        parse_cookie_header,
+        secure_unlink,
+        validate_profile_id,
+    )
 except ImportError:  # pragma: no cover - direct Runner fallback
     from vendor_xiaoheihe.api_client import XiaoheiheApiClient
     from vendor_xiaoheihe.models import Credentials, LoginState, QRLoginSession
-    from vendor_xiaoheihe.security import secure_unlink, validate_profile_id
+    from vendor_xiaoheihe.request_signing import (
+        ensure_client_identity,
+        generate_device_id,
+    )
+    from vendor_xiaoheihe.security import (
+        parse_cookie_header,
+        secure_unlink,
+        validate_profile_id,
+    )
 
 
 class CredentialStore:
@@ -85,6 +102,40 @@ class XiaoheiheRuntime:
             if not anonymous:
                 self._client = client
             return client
+
+    async def apply_manual_cookie(self, cookie_text: str) -> tuple[Credentials | None, str]:
+        """Use a pasted Cookie header instead of QR login.
+
+        Returns (credentials, message); credentials is None when the input is
+        unusable. Existing clients are closed so the next request picks up the
+        new cookie jar.
+        """
+
+        cookies = parse_cookie_header(cookie_text)
+        if not cookies:
+            return None, "没有解析到任何 Cookie"
+        if not cookies.get("user_pkey"):
+            return None, "Cookie 缺少 user_pkey，可能不是登录态"
+        uid = str(cookies.get("heybox_id") or cookies.get("user_heybox_id") or "")
+        credentials = Credentials(
+            profile_id=self.profile_id,
+            uid=uid,
+            nickname=str(cookies.get("nickname") or ""),
+            cookies=cookies,
+            device_id=str(cookies.get("device_id") or generate_device_id()),
+            logged_in_at=datetime.now(UTC).isoformat(),
+        )
+        ensure_client_identity(credentials, device_id=credentials.device_id)
+        try:
+            self.store.save(credentials)
+        except OSError as exc:
+            return None, f"Cookie 保存失败：{type(exc).__name__}"
+        if self._client is not None:
+            await self._client.close()
+            self._client = None
+        self.credentials = credentials
+        self.session = None
+        return credentials, "ok"
 
     async def request_qr(self) -> dict[str, Any]:
         async with self._qr_lock:

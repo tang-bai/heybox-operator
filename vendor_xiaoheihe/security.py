@@ -37,6 +37,21 @@ class SecurityError(ValueError):
     """Input failed a security boundary."""
 
 
+def parse_cookie_header(value: str) -> dict[str, str]:
+    """把手动粘贴的 Cookie 头拆成字典（支持 ; 和换行分隔）。"""
+
+    cookies: dict[str, str] = {}
+    for part in re.split(r"[;\n\r]", str(value or "")):
+        name, separator, raw_value = part.partition("=")
+        if not separator:
+            continue
+        key = name.strip()
+        item = raw_value.strip().strip('"')
+        if key and item:
+            cookies[key] = item
+    return cookies
+
+
 def validate_profile_id(profile_id: str) -> str:
     value = str(profile_id).strip()
     if not PROFILE_RE.fullmatch(value):

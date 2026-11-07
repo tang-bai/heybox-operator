@@ -252,6 +252,7 @@ try:
     from .content_generator import ContentGenerator
     from .context_provider import PersonaContextProvider
     from .dm_store import DirectMessageStore
+    from .emoji_catalog import normalize_outgoing_text
     from .models import IncomingEvent, OutgoingAction, OutgoingStatus
     from .policy import content_fingerprint, is_publishable, normalize_text
     from .qr_generator import qr_data_url
@@ -264,6 +265,7 @@ except ImportError:  # pragma: no cover - direct Runner fallback
     from content_generator import ContentGenerator
     from context_provider import PersonaContextProvider
     from dm_store import DirectMessageStore
+    from emoji_catalog import normalize_outgoing_text
     from models import IncomingEvent, OutgoingAction, OutgoingStatus
     from policy import content_fingerprint, is_publishable, normalize_text
     from qr_generator import qr_data_url
@@ -319,6 +321,13 @@ class XiaoheiheBasicSection(PluginConfigBase):
         order=2,
         default="auto",
         placeholder="请选择 dry_run 或 auto",
+    )
+    manual_cookie: str = _ui_field(
+        label="手动 Cookie（可选）",
+        hint="无法扫码时可直接粘贴小黑盒网页端的 Cookie（形如 user_pkey=...; heybox_id=...）。填写后会优先使用它，留空则继续用扫码登录保存的凭据。",
+        order=3,
+        default="",
+        json_schema_extra={"x-widget": "textarea"},
     )
 
 
@@ -608,6 +617,10 @@ class XiaoheiheConfig(PluginConfigBase):
         return self.basic.mode
 
     @property
+    def manual_cookie(self) -> str:
+        return str(self.basic.manual_cookie or "")
+
+    @property
     def poll_interval_seconds(self) -> int:
         return self.browse.poll_interval_seconds
 
@@ -799,6 +812,7 @@ class XiaoheiheOperatorPlugin(MaiBotPlugin):
         self._rng = random.Random()
         self._last_dm_poll_at = 0.0
         self._dm_blocked_until = 0.0
+        self._manual_cookie_applied = ""
         self._topic_id_cache: dict[str, str] = {}
 
     @staticmethod
@@ -943,6 +957,9 @@ class XiaoheiheOperatorPlugin(MaiBotPlugin):
         self._drawing = DrawingGateway(self.ctx.api)
         self._image_gen = self._resolve_image_generator()
         self._runtime = XiaoheiheRuntime(data_dir, self.config.profile_id)
+        manual_cookie = str(self.config.manual_cookie or "").strip()
+        if manual_cookie:
+            await self._apply_manual_cookie(manual_cookie)
         self._persona = PersonaContextProvider(
             self.ctx,
             life_api_name=str(self.config.life_context_api),
@@ -959,6 +976,23 @@ class XiaoheiheOperatorPlugin(MaiBotPlugin):
         await self._log_persona_source()
         if self.config.enabled:
             self._start_worker()
+
+    async def _apply_manual_cookie(self, cookie_text: str) -> bool:
+        """优先使用配置里的手动 Cookie；失败时保留扫码登录的凭据。"""
+
+        if self._runtime is None:
+            return False
+        credentials, message = await self._runtime.apply_manual_cookie(cookie_text)
+        self._manual_cookie_applied = cookie_text
+        if credentials is None:
+            self.ctx.logger.warning("小黑盒手动 Cookie 未生效：%s", message)
+            return False
+        self.ctx.logger.info(
+            "小黑盒已使用手动 Cookie 登录：uid=%s nickname=%s",
+            (credentials.uid or "?")[:24],
+            (credentials.nickname or "-")[:24],
+        )
+        return True
 
     def _resolve_image_generator(self) -> DirectImageGenerator | None:
         """解析生图参数：优先用插件配置里填的，其次从 MaiBot 主配置里找「画图」provider。"""
@@ -1051,6 +1085,9 @@ class XiaoheiheOperatorPlugin(MaiBotPlugin):
         if scope != "self":
             return
         self.ctx.logger.info("小黑盒运营插件配置已更新：version=%s", version)
+        manual_cookie = str(self.config.manual_cookie or "").strip()
+        if manual_cookie and manual_cookie != self._manual_cookie_applied:
+            await self._apply_manual_cookie(manual_cookie)
         if self.config.enabled:
             self._start_worker()
         elif self._worker is not None:
@@ -1087,7 +1124,7 @@ class XiaoheiheOperatorPlugin(MaiBotPlugin):
         if post_window_active:
             await self._retry_pre_send_proactive_posts(client)
         await self._reconcile_unknowns(client)
-        await self._retry_cooldown_comments(client)
+        await self._retry_suppressed_comments(client)
         for event_type in (NotificationType.MENTION, NotificationType.REPLY):
             await self._poll_notifications(client, event_type)
         now = time.time()
@@ -1103,18 +1140,18 @@ class XiaoheiheOperatorPlugin(MaiBotPlugin):
                     browse_window_active=browse_window_active,
                 )
 
-    async def _retry_cooldown_comments(self, client) -> None:
-        """Retry comments deferred by the account-level cooldown.
+    async def _retry_suppressed_comments(self, client) -> None:
+        """Retry comments suppressed by cooldown or by an operator request.
 
-        Cooldown suppression is transient. The action stays in the audit log,
-        while this pass retries it after the cooldown expires. Only one action
-        is attempted per poll so a backlog cannot burst through the account
-        rate limit.
+        Suppression is transient. The action stays in the audit log while this
+        pass retries it after the cooldown expires (or after /xhh_retry). Only
+        one action is attempted per poll so a backlog cannot burst through the
+        account rate limit.
         """
         if self._store is None or str(self.config.mode).lower() != "auto":
             return
         for row in self._store.list_outgoing(status=OutgoingStatus.SUPPRESSED, limit=50):
-            if str(row.get("error") or "") != "cooldown":
+            if str(row.get("error") or "") not in {"cooldown", "manual_retry"}:
                 continue
             kind = str(row.get("kind") or "")
             metadata = row.get("metadata") if isinstance(row.get("metadata"), dict) else {}
@@ -1346,6 +1383,7 @@ class XiaoheiheOperatorPlugin(MaiBotPlugin):
             recent_context="\n".join(recent_lines[-8:]),
             max_chars=int(self.config.dm_max_reply_chars),
         )
+        reply = normalize_outgoing_text(reply) if reply else reply
         if not reply:
             self._record_dm_skipped(action_key, "empty_generated_reply", message)
             return False
@@ -1696,6 +1734,7 @@ class XiaoheiheOperatorPlugin(MaiBotPlugin):
             post_body=str(getattr(context, "body", "")),
             comment=event.text,
         )
+        reply = normalize_outgoing_text(reply) if reply else reply
         if not reply:
             self._defer_notification(event.event_key, "empty_generated_reply", delay_seconds=300)
             return
@@ -2056,6 +2095,7 @@ class XiaoheiheOperatorPlugin(MaiBotPlugin):
             post_body=str(getattr(context, "body", "")),
             proactive=True,
         )
+        reply = normalize_outgoing_text(reply) if reply else reply
         if not reply or not is_publishable(reply)[0]:
             return False
         action_key = f"feed_comment:{post_id}:{content_fingerprint(reply)}"
@@ -2198,6 +2238,8 @@ class XiaoheiheOperatorPlugin(MaiBotPlugin):
             if not draft:
                 return
             title, body = draft
+            title = normalize_outgoing_text(title)
+            body = normalize_outgoing_text(body)
             if not is_publishable(title)[0] or not is_publishable(body)[0]:
                 return
             fingerprint = content_fingerprint(title + "\n" + body)
@@ -2372,6 +2414,7 @@ class XiaoheiheOperatorPlugin(MaiBotPlugin):
             "enabled": bool(self.config.enabled),
             "mode": str(self.config.mode),
             "profile_id": str(self.config.profile_id),
+            "manual_cookie_configured": bool(str(self.config.manual_cookie or "").strip()),
             "reply_capabilities": {
                 "post_comments": "已启用：读取原帖标题、正文和收到的评论后生成回复",
                 "mentions_and_replies": "已启用：处理小黑盒通知中心的提及、评论和楼中楼",
@@ -2558,6 +2601,178 @@ class XiaoheiheOperatorPlugin(MaiBotPlugin):
     async def handle_login_check_command(self, **kwargs):
         result = await self.handle_check_login(**kwargs)
         return True, f"小黑盒登录状态：{result.get('state', 'unknown')} {result.get('message', '')}", 2
+
+
+    @Command(
+        "xhh_help",
+        description="可在 MaiBot 聊天中输入 /xhh_help，查看小黑盒插件的运维命令。",
+        pattern=r"^/xhh_help$",
+        permission="operator",
+    )
+    async def handle_help_command(self, **kwargs):
+        del kwargs
+        text = (
+            "小黑盒运维命令：\n"
+            "/xhh_status 查看状态\n"
+            "/xhh_check 立即执行一轮检查\n"
+            "/xhh_retry 把失败评论放回重试队列\n"
+            "/xhh_clear_queue [帖子ID] 取消待发送评论\n"
+            "/xhh_test 帖子ID 生成一条预览回复（不发送）\n"
+            "/xhh_login 生成扫码二维码；/xhh_login_check 检查登录"
+        )
+        return True, text, 2
+
+    @Command(
+        "xhh_check",
+        description="可在 MaiBot 聊天中输入 /xhh_check，立即执行一轮通知、私信和巡帖检查。",
+        pattern=r"^/xhh_check$",
+        permission="operator",
+    )
+    async def handle_check_command(self, **kwargs):
+        del kwargs
+        if self._store is None or self._runtime is None or self._runtime.credentials is None:
+            return False, "小黑盒尚未登录或插件未加载", 2
+        try:
+            await self._poll_once()
+        except Exception as exc:  # noqa: BLE001
+            return False, f"检查失败：{type(exc).__name__}", 2
+        suppressed = len(
+            self._store.list_outgoing(status=OutgoingStatus.SUPPRESSED, limit=100)
+        )
+        failed = len(self._store.list_outgoing(status=OutgoingStatus.FAILED, limit=100))
+        return True, f"已执行一轮检查；待重试 {suppressed} 条，失败 {failed} 条", 2
+
+    @Command(
+        "xhh_retry",
+        description="可在 MaiBot 聊天中输入 /xhh_retry，把失败的评论回复放回重试队列。",
+        pattern=r"^/xhh_retry$",
+        permission="operator",
+    )
+    async def handle_retry_command(self, **kwargs):
+        del kwargs
+        if self._store is None:
+            return False, "插件尚未加载", 2
+        count = self._requeue_failed_comments()
+        if count:
+            return True, f"已把 {count} 条失败评论放回重试队列，下一轮检查会处理", 2
+        return True, "没有可重试的失败评论", 2
+
+    @Command(
+        "xhh_clear_queue",
+        description="可在 MaiBot 聊天中输入 /xhh_clear_queue [帖子ID]，取消尚未发送的评论回复。",
+        pattern=r"^/xhh_clear_queue(?:\s+(?P<post_id>\S+))?\s*$",
+        permission="operator",
+    )
+    async def handle_clear_queue_command(self, **kwargs):
+        if self._store is None:
+            return False, "插件尚未加载", 2
+        matched = kwargs.get("matched_groups") or {}
+        post_id = str(matched.get("post_id") or "").strip()
+        count = self._cancel_pending_comments(post_id)
+        scope = f"帖子 {post_id} 下" if post_id else "全部"
+        return True, f"已取消{scope} {count} 条待发送评论", 2
+
+    @Command(
+        "xhh_test",
+        description="可在 MaiBot 聊天中输入 /xhh_test 帖子ID，读取帖子并生成预览回复但不发送。",
+        pattern=r"^/xhh_test(?:\s+(?P<post_id>\S+))\s*$",
+        permission="operator",
+    )
+    async def handle_test_command(self, **kwargs):
+        matched = kwargs.get("matched_groups") or {}
+        post_id = str(matched.get("post_id") or "").strip()
+        if not post_id:
+            return False, "用法：/xhh_test 帖子ID", 2
+        preview = await self._preview_reply(post_id)
+        if not preview.get("success"):
+            return False, str(preview.get("message") or "预览失败"), 2
+        title = str(preview.get("title") or "")
+        draft = str(preview.get("draft") or "")
+        reason = str(preview.get("reason") or "")
+        check = "通过" if preview.get("allowed") else f"拦截（{reason}）"
+        text = (
+            f"帖子：{title}\n"
+            f"预览回复：{draft}\n"
+            f"内容检查：{check}\n"
+            "（仅预览，未发送）"
+        )
+        return True, text, 2
+
+    def _requeue_failed_comments(self, post_id: str = "") -> int:
+        """Move retryable failed comment replies back to the suppressed queue."""
+
+        if self._store is None:
+            return 0
+        requeued = 0
+        for row in self._store.list_outgoing(status=OutgoingStatus.FAILED, limit=100):
+            kind = str(row.get("kind") or "")
+            if kind not in {"notification_reply", "proactive_comment"}:
+                continue
+            error = str(row.get("error") or "")
+            if error.startswith("cancelled_by_user") or error.startswith("dm_"):
+                continue
+            metadata = row.get("metadata") if isinstance(row.get("metadata"), dict) else {}
+            row_post = str(metadata.get("post_id") or row.get("target_id") or "")
+            if post_id and row_post != post_id:
+                continue
+            self._store.update_outgoing(
+                row["action_key"], OutgoingStatus.SUPPRESSED, error="manual_retry"
+            )
+            requeued += 1
+        return requeued
+
+    def _cancel_pending_comments(self, post_id: str = "") -> int:
+        """Cancel planned/suppressed replies; SENDING rows are left alone."""
+
+        if self._store is None:
+            return 0
+        cancelled = 0
+        for status in (OutgoingStatus.PLANNED, OutgoingStatus.SUPPRESSED):
+            for row in self._store.list_outgoing(status=status, limit=100):
+                kind = str(row.get("kind") or "")
+                if kind not in {"notification_reply", "proactive_comment"}:
+                    continue
+                metadata = row.get("metadata") if isinstance(row.get("metadata"), dict) else {}
+                row_post = str(metadata.get("post_id") or row.get("target_id") or "")
+                if post_id and row_post != post_id:
+                    continue
+                self._store.update_outgoing(
+                    row["action_key"], OutgoingStatus.FAILED, error="cancelled_by_user"
+                )
+                event_key = str(metadata.get("event_key") or "")
+                if event_key:
+                    self._store.mark_incoming_done(event_key, state="ignored")
+                cancelled += 1
+        return cancelled
+
+    async def _preview_reply(self, post_id: str) -> dict[str, object]:
+        """Read one post and generate a reply without sending or recording it."""
+
+        if self._runtime is None or self._generator is None:
+            return {"success": False, "message": "插件尚未加载"}
+        try:
+            client = await self._runtime.client()
+            context = await client.fetch_thread_context(str(post_id))
+        except Exception as exc:  # noqa: BLE001
+            return {"success": False, "message": f"读取帖子失败：{type(exc).__name__}"}
+        if context is None:
+            return {"success": False, "message": "帖子不存在或当前账号不可见"}
+        title = str(getattr(context, "title", "") or "")
+        body = str(getattr(context, "body", "") or "")
+        draft = await self._generator.reply(
+            post_title=title, post_body=body, proactive=True
+        )
+        draft = normalize_outgoing_text(draft) if draft else ""
+        if not draft or draft.strip().upper() == "SKIP":
+            return {"success": False, "message": "模型没有生成可用回复（可能输出了 SKIP）"}
+        allowed, reason = is_publishable(draft)
+        return {
+            "success": True,
+            "title": title,
+            "draft": draft,
+            "allowed": allowed,
+            "reason": reason,
+        }
 
 
 class _StoredDirectMessage:
