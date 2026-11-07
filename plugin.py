@@ -1880,7 +1880,12 @@ class XiaoheiheOperatorPlugin(MaiBotPlugin):
                     parent_comment_id=str(result.external_comment_id),
                     notification_id=str(getattr(route, "notification_id", "")),
                 )
-            verified = await self._verify_comment(client, verify_route, content)
+            verified = await self._verify_comment(
+                client,
+                verify_route,
+                content,
+                external_comment_id=result.external_comment_id,
+            )
             status = OutgoingStatus.VERIFIED if verified else OutgoingStatus.SEND_UNKNOWN
             self._store.update_outgoing(
                 action_key,
@@ -1914,28 +1919,42 @@ class XiaoheiheOperatorPlugin(MaiBotPlugin):
                 detail_keys,
             )
 
-    async def _verify_comment(self, client, route: RoutingTarget, content: str) -> bool:
+    async def _verify_comment(
+        self,
+        client,
+        route: RoutingTarget,
+        content: str,
+        *,
+        external_comment_id: str = "",
+    ) -> bool:
+        expected = _squash_text(content)
+        if not expected:
+            return False
+        candidates: list[dict[str, object]] = []
         try:
-            # The dedicated /bbs/app/comment/user route is unstable for this
-            # account. The thread tree is already required for content-aware
-            # replies and contains the same comment data, so use it as the
-            # readback source to avoid false send_unknown states and retries.
+            # The thread tree is required for content-aware replies anyway.
+            # Flatten nested sub-comments so floor replies (楼中楼) can match.
             context = await client.fetch_thread_context(
                 route.post_id,
                 root_comment_id=route.root_comment_id,
             )
-            comments = list(getattr(context, "comments", []) or [])
+            candidates.extend(_iter_comment_nodes(getattr(context, "comments", []) or []))
         except Exception as exc:  # noqa: BLE001
-            self.ctx.logger.warning("小黑盒评论读回核验失败：%s", _error_label(exc))
-            return False
-        expected = normalize_text(content, 240)
-        for item in comments:
-            if not isinstance(item, dict):
-                continue
-            candidate = normalize_text(_comment_text(item), 240)
-            if candidate and candidate == expected:
-                return True
-        return False
+            self._log_debug("小黑盒评论读回核验失败：%s", _error_label(exc))
+        if _comment_matches(candidates, expected, external_comment_id):
+            return True
+        # Fallback: the account's own recent comments list, which also covers
+        # comments hidden from the public thread tree (e.g. pending ads/review).
+        recent = getattr(client, "recent_comments", None)
+        if callable(recent):
+            try:
+                items = await recent(route, limit=30)
+                candidates.extend(
+                    _iter_comment_nodes(items if isinstance(items, list) else [])
+                )
+            except Exception as exc:  # noqa: BLE001
+                self._log_debug("小黑盒近期评论兜底核验失败：%s", _error_label(exc))
+        return _comment_matches(candidates, expected, external_comment_id)
 
     async def _reconcile_unknowns(self, client) -> None:
         if self._store is None:
@@ -1953,7 +1972,12 @@ class XiaoheiheOperatorPlugin(MaiBotPlugin):
                         root_comment_id=str(metadata.get("root_comment_id") or ""),
                         parent_comment_id=str(metadata.get("parent_comment_id") or ""),
                     )
-                    if route.post_id and await self._verify_comment(client, route, str(row.get("content") or "")):
+                    if route.post_id and await self._verify_comment(
+                        client,
+                        route,
+                        str(row.get("content") or ""),
+                        external_comment_id=str(row.get("external_id") or ""),
+                    ):
                         self._store.update_outgoing(row["action_key"], OutgoingStatus.VERIFIED)
                 elif row.get("kind") == "post_like":
                     # 点赞中途重启：点赞可安全重做，记 failed 让以后的浏览重新判断。
@@ -3186,6 +3210,73 @@ def _comment_text(value: object) -> str:
     if isinstance(nested, dict):
         return _comment_text(nested)
     return ""
+
+
+def _iter_comment_nodes(value: object, _seen: set[int] | None = None):
+    """Yield every comment dict, including nested floor replies."""
+
+    if _seen is None:
+        _seen = set()
+    if isinstance(value, (list, tuple)):
+        for item in value:
+            yield from _iter_comment_nodes(item, _seen)
+        return
+    if not isinstance(value, dict):
+        return
+    marker = id(value)
+    if marker in _seen:
+        return
+    _seen.add(marker)
+    yield value
+    for key in (
+        "comments",
+        "comment_list",
+        "children",
+        "sub_comments",
+        "subComments",
+        "replies",
+        "reply_list",
+        "comment",
+    ):
+        child = value.get(key)
+        if isinstance(child, (list, tuple, dict)):
+            yield from _iter_comment_nodes(child, _seen)
+
+
+def _squash_text(value: object) -> str:
+    """Normalize whitespace so platform line-wrapping cannot break readback."""
+
+    return "".join(str(value or "").split()).casefold()
+
+
+def _comment_id(value: object) -> str:
+    if not isinstance(value, dict):
+        return ""
+    for key in ("commentid", "comment_id", "commentId", "id", "comment_a_id", "reply_id"):
+        item = value.get(key)
+        if item not in (None, ""):
+            return str(item)
+    return ""
+
+
+def _comment_matches(
+    candidates: list[dict[str, object]],
+    expected: str,
+    external_comment_id: str = "",
+) -> bool:
+    """Match by server id first, then by squashed text (tolerates @ prefixes)."""
+
+    for item in candidates:
+        if external_comment_id and _comment_id(item) == external_comment_id:
+            return True
+        text = _squash_text(_comment_text(item))
+        if not text:
+            continue
+        if text == expected:
+            return True
+        if len(expected) >= 6 and (expected in text or text in expected):
+            return True
+    return False
 
 
 def create_plugin():

@@ -2,6 +2,15 @@
 
 本文件记录 heybox-operator（二次开发自 [HannJia/xiaoheihe-operator](https://github.com/HannJia/xiaoheihe-operator)）的变更，按时间倒序。
 
+## 2026-11-08（0.9.3：修复评论读回误报 readback_not_found）
+
+- **修复楼中楼核验**：读回时递归展开 `comments/children/sub_comments/replies` 等嵌套结构，楼中楼回复不再因为「只在子楼层」而判成 `send_unknown`。
+- **新增近期评论兜底**：帖子树找不到时改用 `/bbs/app/comment/user`（账号近期评论）再核验一次，覆盖被折叠/待审核的评论。
+- **支持按评论 ID 命中**：发送响应里的 `external_comment_id` 直接作为读回依据，平台改写文本也能确认成功。
+- **文本比对放宽**：忽略全部空白并允许 `回复 @某人：` 前缀，避免平台排版差异造成误判。
+- `_reconcile_unknowns()` 复用同一套核验逻辑并带上已存的 `external_id`，历史 `readback_not_found` 记录在后续轮询中可自动转成 `verified`。
+- 测试：新增 `tests/test_comment_readback.py`（7 个），全量 111 个通过。
+
 ## 2026-11-08（0.9.2：/xhh_whoami 增加宿主权限回显）
 
 - `/xhh_whoami` 现在会通过 `ctx.config.get("plugin.permission")` 回显 MaiBot **实际加载到的操作员列表**，并给出 `matched=True/False`。
