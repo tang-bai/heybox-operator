@@ -11,6 +11,12 @@ Additional references:
 - `AaronZ345/xiaoheihe-cli` is an interface and behavior reference for the
   comment dry-run/readback boundary and Xiaoheihe web post `img` block. Its
   code is not bundled here.
+- `Whereis-Alice/astrbot_plugin_xhhrobot` (Apache-2.0) is the reference used
+  to cross-check the private-message read/send contract: conversation list,
+  per-peer history route, `POST /chatroom/v2/msg/user` form fields,
+  `heybox_ack_id` behaviour and the web-chat User-Agent/cookie shape. The
+  implementation in `vendor_xiaoheihe/api_client.py` is written independently;
+  no code is copied from that project.
 - The repositories listed in `REFERENCES.md` are behavior and contract
   references only; their code is not bundled here unless the notice above
   explicitly says it is derived code.

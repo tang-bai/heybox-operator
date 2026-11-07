@@ -1,7 +1,60 @@
-# Direct-message options
+# 私信能力说明
 
-The current release does not include automatic direct-message sending. The server keeps this capability disabled because the web client exposes reading but no stable reusable send contract.
+## 当前状态：只读 + 白名单自动回复（0.6.0 起）
 
-Possible future approaches are recorded in the project-level Chinese document docs/plans/小黑盒私信方案记录.md: a physical Android phone with a local agent, a local emulator, a GPU cloud emulator, a cloud phone, or protocol analysis. The physical Android phone with a local agent is the preferred first prototype.
+私信已接入发送能力，但仍按「低额度、可审计、可停」的原则默认关闭：
 
-Any future implementation should start in manual-confirmation mode, use an allowlist and daily quota, verify the sent result by rereading the conversation or taking a screenshot, and never retry an unknown result automatically.
+- 默认 `dm_enabled = false`，不读取私信；
+- 开启后默认 `dm_mode = dry_run`，只生成回复草稿并写审计表，不真正发送；
+- 只有同时满足「插件启用 + 私信启用 + 命中回复范围 + 当日额度未用完 + 冷却已过」才会真正发送。
+
+## 白名单 / 黑名单
+
+配置页有三个控件，都是「点击添加项目」的列表：
+
+| 字段 | 作用 |
+|---|---|
+| `私信回复范围`（下拉） | `仅白名单`（默认）只回复白名单内的 UID；`除黑名单外全部` 回复除黑名单外的所有人 |
+| `私信对象白名单` | 「仅白名单」模式下生效；留空且范围是仅白名单时只读不回复 |
+| `私信对象黑名单` | 永远不回复，**优先级高于白名单**（两边同时出现时按黑名单处理） |
+
+判定顺序固定为：空 UID 拒绝 → 命中黑名单拒绝 → 范围为「除黑名单外全部」则放行 → 否则必须命中白名单。切换范围不会清空两个列表，方便随时切回来。
+
+## 发送契约
+
+- 地址：`POST https://api.xiaoheihe.cn/chatroom/v2/msg/user`
+- 查询参数：`to_user_id`（对方 UID）+ 网页端通用参数 + `hkey/_time/nonce/device_id`
+- 表单：`heybox_ack_id`（单调递增的确认号）、`img`（图片 URL，可空）、`msg`（正文）、`msg_type=6`
+- 请求特征：网页版聊天面板的 User-Agent，Cookie 只保留登录相关字段
+  （`user_pkey`、`user_heybox_id`、`heybox_id`、`avatar`、`level`、`nickname`、`x_xhh_tokenid`）
+- 成功判定：响应必须带 `heychat_ack_id` / `msg_id` / `msg_seq` 中的至少一个，否则记为「结果未知」而不重发
+- 限制与认证：响应文本含「禁止发送消息 / 禁止私信 / 私信功能已被限制」时暂停 30 分钟；
+  返回 `web_auth` / `name_verify` 协议提示时暂停 6 小时，并提示先去 App 完成安全或实名认证
+
+## 读取契约
+
+- 会话列表：`GET /bbs/app/user/message?list_type=2`，用于发现「谁给我发过私信」
+- 单个会话：`GET /chatroom/v2/msg/user?to_user_id=<uid>`
+- 首次运行只建立历史基线，绝不回复旧消息；之后每轮只处理基线之后的新消息
+
+## 配图
+
+- 开关：`私信回复配图`（默认关闭）。
+- 流程：生成回复文本 → 按回复内容生成图片（优先直连生图 API，回退「麦麦绘图」并带身份参考图）→ 用小黑盒的图片上传接口转成 COS 链接 → 随 `img` 字段一起发送。
+- 降级：生图超时、上传失败、返回的 URL 不是 https 时只记一条 warning，继续发纯文字，不阻塞回复；审计表里用 `image_requested` / `image_attached` 两个字段区分。
+- dry_run 模式不会生成图片，避免白花模型额度。
+
+## 幂等与重试
+
+- 每条私信对应唯一的动作键 `dm_reply:<message_id>`，同一消息只会尝试一次；
+- 发送超时、连接中断等无法确认的情况记为 `send_unknown`，不自动重发；
+- 生成失败（模型返回空 / 内容边界拦截）记为终态，不会每轮反复调用模型；
+- 被限制或额度用尽时**不写动作**，等限制解除或次日额度重置后自然重试。
+
+## 风险
+
+- 私信发送是逆向得到的网页端契约，上游随时可能调整参数或风控策略；
+- 账号被限制私信时插件只会暂停，不会尝试绕过；
+- 建议先用 `dry_run` 跑几天，确认生成内容符合预期后再切 `auto`，并把每日额度保持在 1–3 条。
+
+历史方案记录（实体安卓机 + 本地 agent、模拟器、云手机等）保留在 git 历史中；当前版本不再需要这些外部环境。

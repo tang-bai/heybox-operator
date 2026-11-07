@@ -7,7 +7,7 @@ import re
 import time
 from collections.abc import Mapping
 from pathlib import Path
-from typing import Any, ClassVar, Iterable, Literal
+from typing import Any, ClassVar, Iterable, Literal, get_args
 
 from maibot_sdk import API, Command, Field, MaiBotPlugin, PluginConfigBase, Tool
 
@@ -184,18 +184,6 @@ _ASLEEP_PATTERN = re.compile(r"当前活动[：:]\s*(?:睡觉|小睡)")
 
 # Literal 让 MaiBot SDK 自动生成真正的下拉框和选项；显示给用户的是中文名称，
 # 插件运行时再通过小黑盒搜索接口解析为内部 topic_id。
-CommunityName = Literal[
-    "Steam",
-    "PC 游戏",
-    "盒友杂谈",
-    "盒友日常",
-    "主机游戏",
-    "手机游戏",
-    "游戏攻略",
-    "独立游戏",
-    "电竞赛事",
-    "优惠资讯",
-]
 # 发帖目标分为「社区」和「话题」两类，分别用独立的 Literal 下拉框。
 # 数据来自小黑盒 TOPIC_INDEX 接口，用 game.app_id 区分：
 #   app_id == -1  => 社区（版块）
@@ -255,8 +243,8 @@ HashtagName = Literal[
     "恐怖游戏",
 ]
 
-PostTargetName = str
 RunMode = Literal["dry_run", "auto"]
+DmReplyScope = Literal["allowlist", "blocklist"]
 
 try:
     from .drawpic_gateway import DrawingGateway
@@ -513,7 +501,7 @@ class XiaoheiheContentSection(PluginConfigBase):
     )
     life_context_api: str = _ui_field(
         label="生活轨迹 API",
-        hint="可选联动「生活频率」（ID：org.orge-8.life-frequency）；当前完整 API 是 org.orge-8.life-frequency.get_current_context，只读调用。未安装时会自动退回当前时间和已有设定，不影响纯文本发帖。",
+        hint="可选联动「生活频率」（ID：org.orge-8.life-frequency）。优先调用这里填写的只读 API；新版该插件没有 get_current_context 时会自动改读它的 life_state.json 状态文件，都读不到才退回当前时间，不影响纯文本发帖。",
         order=5,
         default="org.orge-8.life-frequency.get_current_context",
     )
@@ -532,50 +520,68 @@ class XiaoheiheDirectMessageSection(PluginConfigBase):
 
     dm_enabled: bool = _ui_field(
         label="启用私信功能",
-        hint="当前发布版不提供稳定的私信自动发送，建议保持关闭；网页版也不能直接回复私信。",
+        hint="开启后轮询小黑盒私信，并对「私信对象白名单」里的对话自动回复；关闭时完全不读取私信。首次接入建议先用下面的 dry_run 只生成草稿。",
         order=0,
         default=False,
     )
-    dm_mode: str = _ui_field(
+    dm_mode: RunMode = _ui_field(
         label="私信运行模式",
-        hint="兼容保留字段；当前版本不提供私信发送，auto 也会安全闭锁。",
+        hint="dry_run 只生成并记录草稿；auto 才真正发送。插件级「运行模式」是 dry_run 时也会一起闭锁。",
         order=1,
         default="dry_run",
-        placeholder="dry_run",
+        placeholder="请选择 dry_run 或 auto",
     )
     dm_poll_interval_seconds: int = _ui_field(
         label="私信检查间隔（秒）",
-        hint="兼容保留字段；只在未来接入私信能力后生效。",
+        hint="私信收件箱检查间隔；最低 60 秒，常用 180 秒。",
         order=2,
         default=180,
         step=30,
     )
     dm_daily_quota: int = _ui_field(
         label="每日私信回复数",
-        hint="兼容保留字段；当前版本不会发送私信，设为 0 可明确关闭。",
+        hint="每天最多自动回复的私信条数；设为 0 表示只读取、不回复。",
         order=3,
         default=1,
         step=1,
     )
     dm_cooldown_seconds: int = _ui_field(
         label="私信回复冷却（秒）",
-        hint="兼容保留字段；未来接入私信能力后用于限制同一账号的回复频率。",
+        hint="同一个人的两条自动回复之间的最短间隔，用于降低风控风险。",
         order=4,
         default=600,
         step=60,
     )
     dm_max_reply_chars: int = _ui_field(
         label="私信回复最大字数",
-        hint="兼容保留字段；当前版本不会发送私信。",
+        hint="单条私信回复的最大字数，超出会截断。",
         order=5,
         default=180,
         step=20,
     )
+    dm_reply_scope: DmReplyScope = _ui_field(
+        label="私信回复范围",
+        hint="仅白名单：只回复白名单里的 UID；除黑名单外全部：除黑名单以外的人都回复。黑名单始终优先。",
+        order=6,
+        default="allowlist",
+    )
     dm_user_allowlist: list[str] = _ui_field(
         label="私信对象白名单",
-        hint="兼容保留字段；当前版本不会生成自动私信回复，建议留空。点击添加项目逐条填写 UID。",
-        order=6,
+        hint="「仅白名单」模式下只有这些 UID 会收到自动回复。点击添加项目逐条填写 UID；留空且范围是仅白名单时只读取、不回复。",
+        order=7,
         default_factory=list,
+    )
+    dm_user_blocklist: list[str] = _ui_field(
+        label="私信对象黑名单",
+        hint="这些 UID 永远不会收到自动回复，优先级高于白名单。点击添加项目逐条填写 UID。",
+        order=8,
+        default_factory=list,
+    )
+    dm_generate_images: bool = _ui_field(
+        label="私信回复配图",
+        hint="开启后先按回复内容生成一张图并上传，再随私信一起发送；生图或上传失败会自动降级为纯文字，不影响回复本身。",
+        order=9,
+        default=False,
     )
 
 
@@ -670,8 +676,20 @@ class XiaoheiheConfig(PluginConfigBase):
         return self.dm.dm_max_reply_chars
 
     @property
+    def dm_reply_scope(self) -> str:
+        return str(self.dm.dm_reply_scope)
+
+    @property
     def dm_user_allowlist(self) -> list[str]:
         return self.dm.dm_user_allowlist
+
+    @property
+    def dm_user_blocklist(self) -> list[str]:
+        return self.dm.dm_user_blocklist
+
+    @property
+    def dm_generate_images(self) -> bool:
+        return self.dm.dm_generate_images
 
     @property
     def community_allowlist(self) -> list[str]:
@@ -722,8 +740,7 @@ class XiaoheiheConfig(PluginConfigBase):
             tags.append(selected)
         custom = str(self.automation.custom_hashtags or "").strip()
         if custom:
-            import re as _re
-            tags.extend(t.strip() for t in _re.split(r"[,，\s]+", custom) if t.strip())
+            tags.extend(t.strip() for t in re.split(r"[,，\s]+", custom) if t.strip())
         return list(dict.fromkeys(tags))
 
     @property
@@ -781,6 +798,7 @@ class XiaoheiheOperatorPlugin(MaiBotPlugin):
         self._next_feed_at = 0.0
         self._rng = random.Random()
         self._last_dm_poll_at = 0.0
+        self._dm_blocked_until = 0.0
         self._topic_id_cache: dict[str, str] = {}
 
     @staticmethod
@@ -843,6 +861,36 @@ class XiaoheiheOperatorPlugin(MaiBotPlugin):
                         normalized_automation["post_target_secondary"] = named_targets[1]
                     data["automation"] = normalized_automation
                     changed = True
+            # 二创把「发帖目标 2」改成「话题标签」，两个下拉框的取值也随之收窄。
+            # 上游配置里的 Steam / PC 游戏 等值不在新枚举中，直接交给 Pydantic
+            # 会被判定非法；这里降级到兼容字段，发送前仍会按名字解析成真实
+            # topic_id / hashtag，行为与上游一致，不会因为升级而丢配置。
+            allowed_primary = set(get_args(CommunityName))
+            allowed_hashtags = set(get_args(HashtagName))
+            primary = str(normalized_automation.get("post_target_primary") or "").strip()
+            if primary and primary not in allowed_primary:
+                compat_targets = [
+                    str(item).strip()
+                    for item in (normalized_automation.get("post_topic_ids") or [])
+                    if str(item).strip()
+                ]
+                if primary not in compat_targets:
+                    compat_targets.insert(0, primary)
+                normalized_automation["post_topic_ids"] = compat_targets
+                normalized_automation["post_target_primary"] = ""
+                changed = True
+            secondary = str(normalized_automation.get("post_target_secondary") or "").strip()
+            if secondary and secondary not in allowed_hashtags:
+                existing_tags = [
+                    item.strip()
+                    for item in re.split(r"[,，\s]+", str(normalized_automation.get("custom_hashtags") or ""))
+                    if item.strip()
+                ]
+                merged_tags = list(dict.fromkeys([secondary, *existing_tags]))
+                normalized_automation["custom_hashtags"] = ", ".join(merged_tags)
+                normalized_automation["post_target_secondary"] = ""
+                changed = True
+            data["automation"] = normalized_automation
         data["plugin"] = plugin
 
         try:
@@ -922,17 +970,24 @@ class XiaoheiheOperatorPlugin(MaiBotPlugin):
         if gen is not None:
             return gen
 
-        # 回退：读 MaiBot 主配置 model_config.toml 里 api_provider 名为「画图」的中转站
+        # 回退：读 MaiBot 主配置 model_config.toml 里 api_provider 名为「画图」的中转站。
+        # 路径只由 ctx.paths.data_dir 推导，不写死开发机目录；找不到时安静放弃，
+        # 配图会自动降级为纯文字，不影响发帖。
         try:
             import tomllib
             from pathlib import Path as _Path
 
-            cands = [
-                _Path(r"E:\mai\config\model_config.toml"),
-            ]
+            cands: list[_Path] = []
             data_dir = getattr(getattr(self.ctx, "paths", None), "data_dir", None)
             if data_dir:
-                cands.append(_Path(data_dir).parent.parent / "config" / "model_config.toml")
+                root = _Path(data_dir)
+                for candidate in (
+                    root.parent / "config" / "model_config.toml",
+                    root.parent.parent / "config" / "model_config.toml",
+                    root / "config" / "model_config.toml",
+                ):
+                    if candidate not in cands:
+                        cands.append(candidate)
             for config_path in cands:
                 if not config_path.exists():
                     continue
@@ -1107,127 +1162,183 @@ class XiaoheiheOperatorPlugin(MaiBotPlugin):
             return
 
     async def _poll_direct_messages(self, client) -> None:
+        """Read the DM inbox, then answer allowlisted unanswered messages.
+
+        Two phases: refresh conversations (one cheap list call, skipped when the
+        conversation marker has not changed), then answer every unanswered
+        incoming message. Nothing is dispatched twice because each reply owns
+        the durable action key dm_reply:<message_id>.
+        """
+
         if self._dm_store is None or self._store is None or self._runtime is None:
             return
+        profile_id = self.config.profile_id
         try:
-            _, baseline_ready = self._dm_store.get_cursor(self.config.profile_id)
-            # Message lists are newest-first and shift when a new message
-            # arrives. Reusing an old offset can skip the message we need.
-            page = await client.fetch_direct_messages(
-                cursor="",
-                page=1,
-                page_size=30,
-            )
+            conversations = await client.fetch_direct_conversations(limit=20)
         except Exception as exc:  # noqa: BLE001
             probe = getattr(client, "last_direct_message_probe", {})
             self._dm_store.set_probe(
-                self.config.profile_id,
-                {"status": "error", **(_safe_status_data(probe) or {})},
+                profile_id,
+                {"status": "error", "probe": _safe_status_data(probe)},
             )
             self.ctx.logger.warning(
-                "小黑盒私信只读探测失败：type=%s probe=%s",
+                "小黑盒私信收件箱读取失败：type=%s probe=%s",
                 type(exc).__name__,
                 _safe_status_data(probe),
             )
             return
-
-        messages = list(getattr(page, "items", []) or [])
         probe = getattr(client, "last_direct_message_probe", {})
         self._dm_store.set_probe(
-            self.config.profile_id,
-            {
-                "status": "ok",
-                "source": str(getattr(page, "source", "") or ""),
-                "accepted_count": len(messages),
-                "has_more": bool(getattr(page, "has_more", False)),
-                **(_safe_status_data(probe) or {}),
-            },
+            profile_id, {"status": "ok", "probe": _safe_status_data(probe)}
         )
+
+        _, baseline_ready = self._dm_store.get_cursor(profile_id)
+        refreshed = 0
+        fresh_messages = 0
+        for conversation in conversations.items:
+            peer_uid = str(conversation.peer_uid or "").strip()
+            if not peer_uid:
+                continue
+            if not self._dm_recipient_allowed(peer_uid):
+                continue
+            marker = self._dm_store.get_thread_marker(profile_id, peer_uid)
+            if conversation.marker and marker == conversation.marker:
+                continue
+            try:
+                page = await client.fetch_direct_messages(peer_uid=peer_uid, limit=30)
+            except Exception as exc:  # noqa: BLE001
+                self.ctx.logger.debug(
+                    "小黑盒私信会话读取失败：peer=%s type=%s",
+                    peer_uid[:40],
+                    type(exc).__name__,
+                )
+                continue
+            refreshed += 1
+            for message in page.items:
+                if not getattr(message, "incoming", False):
+                    continue
+                inserted = self._dm_store.insert_message(
+                    message, baseline=not baseline_ready
+                )
+                if baseline_ready and inserted:
+                    fresh_messages += 1
+            self._dm_store.set_thread_marker(profile_id, peer_uid, conversation.marker)
         if not baseline_ready:
-            inserted = 0
-            for message in messages:
-                if self._dm_store.insert_message(message, baseline=True):
-                    inserted += 1
-            self._dm_store.set_cursor(
-                self.config.profile_id,
-                str(getattr(page, "next_cursor", "") or ""),
-                baseline_ready=True,
-            )
+            self._dm_store.set_cursor(profile_id, "", baseline_ready=True)
             self.ctx.logger.info(
-                "小黑盒私信历史基线已建立：messages=%s inserted=%s source=%s",
-                len(messages),
-                inserted,
-                str(getattr(page, "source", "")),
+                "小黑盒私信历史基线已建立：conversations=%s", len(conversations.items)
             )
             return
-
-        inserted = 0
-        for message in messages:
-            if not self._dm_store.insert_message(message):
-                continue
-            inserted += 1
-            if not bool(getattr(message, "incoming", False)):
-                continue
-            self.ctx.logger.info(
-                "发现新的小黑盒私信：message_id=%s sender_uid=%s chars=%s",
-                str(getattr(message, "message_id", ""))[:80],
-                str(getattr(message, "sender_uid", ""))[:80],
-                len(str(getattr(message, "text", "") or "")),
-            )
-            await self._process_direct_message(message)
-        self._dm_store.set_cursor(
-            self.config.profile_id,
-            str(getattr(page, "next_cursor", "") or ""),
-            baseline_ready=True,
+        replied = 0
+        for message in self._pending_direct_messages():
+            if await self._process_direct_message(client, message):
+                replied += 1
+        self.ctx.logger.info(
+            "小黑盒私信轮询完成：conversations=%s refreshed=%s new=%s replied=%s",
+            len(conversations.items),
+            refreshed,
+            fresh_messages,
+            replied,
         )
-        if inserted:
-            self.ctx.logger.info(
-                "小黑盒私信轮询完成：new_messages=%s source=%s",
-                inserted,
-                str(getattr(page, "source", "")),
-            )
 
-    async def _process_direct_message(self, message) -> None:
-        if self._store is None or self._dm_store is None or self._generator is None:
-            return
-        sender_uid = str(getattr(message, "sender_uid", "") or "").strip()
+    def _dm_recipient_allowed(self, sender_uid: str) -> bool:
+        """Blacklist always wins; otherwise the configured scope decides."""
+
+        uid = str(sender_uid or "").strip()
+        if not uid:
+            return False
+        blocklist = {
+            str(value).strip()
+            for value in self.config.dm_user_blocklist
+            if str(value).strip()
+        }
+        if uid in blocklist:
+            return False
+        if str(self.config.dm_reply_scope).lower() == "blocklist":
+            return True
         allowlist = {
             str(value).strip()
             for value in self.config.dm_user_allowlist
             if str(value).strip()
         }
-        if not allowlist or sender_uid not in allowlist:
-            self.ctx.logger.info(
-                "私信只读记录，未生成自动回复：sender_uid=%s allowlist_configured=%s",
-                sender_uid[:80],
-                bool(allowlist),
-            )
-            return
-        if not self._within_quota("dm_reply", int(self.config.dm_daily_quota)):
-            return
+        return uid in allowlist
 
+    def _pending_direct_messages(self, *, limit: int = 5) -> list["_StoredDirectMessage"]:
+        """Oldest incoming messages that still have no durable reply action."""
+
+        if self._dm_store is None or self._store is None:
+            return []
+        cutoff = time.time() - 72 * 60 * 60
+        pending: list[_StoredDirectMessage] = []
+        rows = self._dm_store.list_recent(self.config.profile_id, limit=50)
+        for row in reversed(rows):
+            if not int(row.get("incoming") or 0):
+                continue
+            # 首次轮询建立的历史基线只做记录，永远不回复。
+            if int(row.get("baseline") or 0):
+                continue
+            peer_uid = str(row.get("peer_uid") or "").strip()
+            if not peer_uid or not self._dm_recipient_allowed(peer_uid):
+                continue
+            created_at = float(row.get("created_at") or row.get("observed_at") or 0)
+            if created_at and created_at < cutoff:
+                continue
+            message_id = str(row.get("message_id") or "")
+            if not message_id:
+                continue
+            if self._store.has_outgoing_key(f"dm_reply:{message_id}"):
+                continue
+            pending.append(_StoredDirectMessage(row))
+            if len(pending) >= limit:
+                break
+        return pending
+
+    async def _process_direct_message(self, client, message) -> bool:
+        """Generate and send one reply. Returns True only when verified sent."""
+
+        if self._store is None or self._dm_store is None or self._generator is None:
+            return False
+        sender_uid = str(getattr(message, "sender_uid", "") or "").strip()
+        peer_uid = str(getattr(message, "peer_uid", "") or "").strip() or sender_uid
+        if not self._dm_recipient_allowed(sender_uid):
+            self.ctx.logger.info(
+                "私信只读记录，未生成自动回复：sender_uid=%s scope=%s",
+                sender_uid[:80],
+                str(self.config.dm_reply_scope),
+            )
+            return False
+        if not peer_uid:
+            return False
+        now = time.time()
+        if now < self._dm_blocked_until:
+            self.ctx.logger.info(
+                "小黑盒私信处于暂停期，暂不回复：remaining_seconds=%s",
+                int(self._dm_blocked_until - now),
+            )
+            return False
+        if not self._within_quota("dm_reply", int(self.config.dm_daily_quota)):
+            return False
         message_id = str(getattr(message, "message_id", "") or "")
         if not message_id:
-            return
+            return False
         action_key = f"dm_reply:{message_id}"
         if self._store.get_outgoing(action_key):
-            return
+            return False
         previous = self._store.last_outgoing_at(
             kind="dm_reply",
             target_id=sender_uid,
             exclude_action_key=action_key,
         )
-        if previous is not None and time.time() - previous < max(0, int(self.config.dm_cooldown_seconds)):
-            self.ctx.logger.info(
-                "小黑盒私信回复处于同一账号冷却期：sender_uid=%s",
-                sender_uid[:80],
-            )
-            return
+        if previous is not None and now - previous < max(
+            0, int(self.config.dm_cooldown_seconds)
+        ):
+            return False
         recent = self._dm_store.list_recent(self.config.profile_id, limit=12)
         recent_lines = [
             f"{item.get('sender_name') or item.get('sender_uid') or '对方'}：{normalize_text(str(item.get('text') or ''), 240)}"
             for item in reversed(recent)
-            if str(item.get("peer_uid") or "") == sender_uid and str(item.get("text") or "").strip()
+            if str(item.get("peer_uid") or "") == peer_uid
+            and str(item.get("text") or "").strip()
         ]
         reply = await self._generator.direct_message_reply(
             sender_name=str(getattr(message, "sender_name", "") or ""),
@@ -1236,11 +1347,12 @@ class XiaoheiheOperatorPlugin(MaiBotPlugin):
             max_chars=int(self.config.dm_max_reply_chars),
         )
         if not reply:
-            return
+            self._record_dm_skipped(action_key, "empty_generated_reply", message)
+            return False
         allowed, reason = is_publishable(reply)
         if not allowed:
-            self.ctx.logger.info("小黑盒私信回复被内容边界拦截：%s", reason)
-            return
+            self._record_dm_skipped(action_key, f"content_boundary:{reason}", message)
+            return False
         action = OutgoingAction(
             action_key,
             "dm_reply",
@@ -1249,27 +1361,165 @@ class XiaoheiheOperatorPlugin(MaiBotPlugin):
             metadata={
                 "message_id": message_id,
                 "conversation_id": str(getattr(message, "conversation_id", "") or ""),
-                "peer_uid": sender_uid,
+                "peer_uid": peer_uid,
                 "sender_name": str(getattr(message, "sender_name", "") or ""),
                 "reply_mode": str(self.config.dm_mode),
+                "image_requested": bool(self.config.dm_generate_images),
             },
         )
         if not self._store.begin_outgoing(action):
-            return
+            return False
         if str(self.config.dm_mode).lower() == "dry_run" or str(self.config.mode).lower() == "dry_run":
             self._store.update_outgoing(action_key, OutgoingStatus.DRY_RUN)
-            return
-        # The read contract is being verified first. A write route is not
-        # implemented yet, so auto mode fails closed instead of guessing.
+            self.ctx.logger.info(
+                "小黑盒私信回复处于 dry_run，已记录草稿未发送：message_id=%s",
+                message_id[:40],
+            )
+            return True
+        image_url = ""
+        if self.config.dm_generate_images:
+            image_url = await self._build_dm_image(client, reply, message_id)
+            self._store.merge_outgoing_metadata(
+                action_key, {"image_attached": bool(image_url)}
+            )
+        # Persist the send boundary before the write; a crash after this point
+        # leaves a send_unknown action that is never re-sent automatically.
+        self._store.update_outgoing(action_key, OutgoingStatus.SENDING, error="send_started")
+        try:
+            result = await client.send_direct_message(
+                peer_uid=peer_uid, text=reply, image_url=image_url
+            )
+        except Exception as exc:  # noqa: BLE001
+            category = str(getattr(exc, "category", "") or "")
+            if category == "dm_restricted":
+                self._dm_blocked_until = now + 30 * 60
+                self._store.update_outgoing(
+                    action_key, OutgoingStatus.FAILED, error="dm_restricted"
+                )
+                self.ctx.logger.warning(
+                    "小黑盒禁止当前账号发送私信，已暂停私信回复 30 分钟"
+                )
+                return False
+            if category == "dm_verification_required":
+                self._dm_blocked_until = now + 6 * 60 * 60
+                self._store.update_outgoing(
+                    action_key,
+                    OutgoingStatus.FAILED,
+                    error="dm_verification_required",
+                )
+                self.ctx.logger.warning(
+                    "小黑盒要求在 App 内完成安全或实名认证，私信回复暂停 6 小时"
+                )
+                return False
+            status = OutgoingStatus.FAILED if category in {
+                "credential_invalid",
+                "forbidden",
+                "rate_limited",
+                "upstream_rejected",
+                "response_shape",
+                "http",
+            } else OutgoingStatus.SEND_UNKNOWN
+            self._store.update_outgoing(action_key, status, error=_error_label(exc))
+            self.ctx.logger.error(
+                "小黑盒私信发送失败或结果未知：type=%s category=%s",
+                type(exc).__name__,
+                category,
+            )
+            return False
+        acknowledged = str(
+            getattr(result, "message_id", "")
+            or getattr(result, "heychat_ack_id", "")
+            or "",
+        )
         self._store.update_outgoing(
             action_key,
-            OutgoingStatus.FAILED,
-            error="dm_send_contract_unavailable",
+            OutgoingStatus.VERIFIED,
+            external_id=acknowledged,
+            request_id=str(getattr(result, "heychat_ack_id", "") or ""),
         )
-        self.ctx.logger.warning(
-            "小黑盒私信已生成回复但未发送：公开网页只提供读取接口，发送契约未确认 message_id=%s",
-            message_id[:80],
+        self.ctx.logger.info(
+            "小黑盒私信已发送并经服务端确认：message_id=%s ack=%s",
+            message_id[:40],
+            str(getattr(result, "heychat_ack_id", ""))[:40],
         )
+        return True
+
+    async def _build_dm_image(self, client, reply: str, message_id: str) -> str:
+        """Generate and upload one picture for a DM reply; "" means text only.
+
+        Image generation is optional: every failure path falls back to the
+        text-only reply instead of blocking it.
+        """
+
+        request_id = f"dm-{message_id}"
+        prompt = f"maibot 的日常随手拍配图：{normalize_text(reply, 120)}"
+        image_bytes: bytes | None = None
+        stage = "direct_image"
+        try:
+            if self._image_gen is not None:
+                image_bytes = await self._image_gen.generate(prompt)
+            if image_bytes is None and self._drawing is not None:
+                stage = "draw_submit"
+                reference = (
+                    await self._persona.identity_reference()
+                    if self._persona is not None
+                    else None
+                )
+                task = await self._drawing.submit(
+                    f"{prompt}。保持身份参考图中的人物形象一致。",
+                    request_id=request_id,
+                    source_images=[reference] if reference else None,
+                )
+                stage = "draw_task_id"
+                task_id = _task_id(task)
+                if not task_id:
+                    raise RuntimeError("绘图任务未返回 task_id")
+                stage = "draw_wait"
+                finished = await self._drawing.wait(task_id, request_id=request_id)
+                if str(finished.get("status", "")).casefold() != "completed":
+                    raise RuntimeError("绘图任务未完成")
+                stage = "draw_read_image"
+                image_bytes = await self._drawing.read_image(task_id)
+            if not image_bytes:
+                raise RuntimeError("没有可用的生图方式")
+            stage = "upload_image"
+            uploaded = await client.upload_image_bytes(
+                image_bytes, filename=f"dm-{message_id}.png"
+            )
+            url = str(uploaded.get("url") or "").strip()
+            if not url.startswith("https://"):
+                raise RuntimeError("上传结果不是 https 地址")
+        except Exception as exc:  # noqa: BLE001
+            self.ctx.logger.warning(
+                "小黑盒私信配图失败，已降级为纯文字：stage=%s error=%s",
+                stage,
+                type(exc).__name__,
+            )
+            return ""
+        self.ctx.logger.info(
+            "小黑盒私信配图已上传：message_id=%s bytes=%s",
+            message_id[:40],
+            len(image_bytes),
+        )
+        return url
+
+    def _record_dm_skipped(self, action_key: str, reason: str, message) -> None:
+        """Terminal audit row for messages we deliberately never sent."""
+
+        if self._store is None:
+            return
+        action = OutgoingAction(
+            action_key,
+            "dm_reply",
+            str(getattr(message, "sender_uid", "") or ""),
+            "",
+            metadata={
+                "message_id": str(getattr(message, "message_id", "") or ""),
+                "skipped": True,
+            },
+        )
+        if self._store.begin_outgoing(action):
+            self._store.update_outgoing(action_key, OutgoingStatus.FAILED, error=reason)
 
     async def _poll_notifications(self, client, event_type: NotificationType) -> None:
         assert self._store is not None
@@ -2047,7 +2297,7 @@ class XiaoheiheOperatorPlugin(MaiBotPlugin):
                 title=title,
                 content_blocks=blocks,
                 topic_ids=topic_id_value,
-                hashtags=self.post_hashtags,
+                hashtags=self.config.post_hashtags,
             )
             link_id = str(result.get("link_id") or "")
             if not link_id:
@@ -2125,14 +2375,25 @@ class XiaoheiheOperatorPlugin(MaiBotPlugin):
             "reply_capabilities": {
                 "post_comments": "已启用：读取原帖标题、正文和收到的评论后生成回复",
                 "mentions_and_replies": "已启用：处理小黑盒通知中心的提及、评论和楼中楼",
-                "direct_messages": "当前版本未纳入发布范围：默认关闭，不发送私信",
+                "direct_messages": (
+                    "已启用：读取会话后按白名单自动回复私信"
+                    if self.config.dm_enabled
+                    else "未启用：开启「启用私信功能」并按白名单配置后生效"
+                ),
             },
             "direct_message": {
                 "enabled": bool(self.config.dm_enabled),
                 "mode": str(self.config.dm_mode),
                 "poll_interval_seconds": int(self.config.dm_poll_interval_seconds),
                 "daily_quota": int(self.config.dm_daily_quota),
+                "cooldown_seconds": int(self.config.dm_cooldown_seconds),
+                "scope": str(self.config.dm_reply_scope),
                 "allowlist_size": len(list(self.config.dm_user_allowlist or [])),
+                "blocklist_size": len(list(self.config.dm_user_blocklist or [])),
+                "images_enabled": bool(self.config.dm_generate_images),
+                "paused_remaining_seconds": max(
+                    0, int(self._dm_blocked_until - time.time())
+                ),
                 "state": dm_summary,
             },
             "settings_help": {
@@ -2143,8 +2404,11 @@ class XiaoheiheOperatorPlugin(MaiBotPlugin):
                 "post_active_window": f"主动发帖和发送前失败重试只在服务器本地时间 {self.config.post_active_start_time}-{self.config.post_active_end_time} 运行",
                 "posts_per_day": "建议测试阶段保持 0",
                 "notification_replies_per_day": "建议从 1 开始，确认链路后再增加",
-                "dm_user_allowlist": "私信功能暂不启用；保留字段仅用于兼容旧配置",
-                "dm_mode": "当前发布版不提供私信发送，保持 dry_run",
+                "dm_reply_scope": "仅白名单：只回复名单内 UID；除黑名单外全部：名单外的人都回复",
+                "dm_user_allowlist": "「仅白名单」模式下生效；留空则只读不回复",
+                "dm_user_blocklist": "黑名单里的 UID 永远不回复，优先级高于白名单",
+                "dm_generate_images": "开启后私信回复会附带一张生成图，失败自动降级纯文字",
+                "dm_mode": "私信默认 dry_run；确认链路后改成 auto 才会真正发送",
             },
             "message": "小黑盒运营插件已加载" if not self.config.enabled else "小黑盒运营插件运行中",
         }
@@ -2294,6 +2558,29 @@ class XiaoheiheOperatorPlugin(MaiBotPlugin):
     async def handle_login_check_command(self, **kwargs):
         result = await self.handle_check_login(**kwargs)
         return True, f"小黑盒登录状态：{result.get('state', 'unknown')} {result.get('message', '')}", 2
+
+
+class _StoredDirectMessage:
+    """Attribute view over a dm_messages row so the reply path stays uniform."""
+
+    __slots__ = (
+        "message_id",
+        "conversation_id",
+        "peer_uid",
+        "sender_uid",
+        "sender_name",
+        "text",
+        "created_at",
+    )
+
+    def __init__(self, row: Mapping[str, Any]) -> None:
+        self.message_id = str(row.get("message_id") or "")
+        self.conversation_id = str(row.get("conversation_id") or "")
+        self.peer_uid = str(row.get("peer_uid") or "")
+        self.sender_uid = str(row.get("sender_uid") or "")
+        self.sender_name = str(row.get("sender_name") or "")
+        self.text = str(row.get("text") or "")
+        self.created_at = float(row.get("created_at") or 0)
 
 
 def _task_id(value: object) -> str:

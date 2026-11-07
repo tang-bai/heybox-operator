@@ -11,7 +11,7 @@ from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
-from urllib.parse import parse_qsl, quote, urlsplit
+from urllib.parse import parse_qsl, quote, unquote, urlsplit
 
 from . import http_compat as httpx
 
@@ -24,13 +24,17 @@ from .models import (
     QRLoginSession,
     RoutingTarget,
     SendResult,
+    DirectConversationPage,
     DirectMessagePage,
+    DirectMessageSendResult,
     ThreadContext,
 )
 from .parsers import (
     ResponseShapeError,
     parse_credentials,
+    parse_direct_conversation_page,
     parse_direct_message_page,
+    parse_direct_message_send_result,
     parse_feed,
     parse_login_state,
     parse_notifications,
@@ -65,6 +69,36 @@ WEB_CLIENT_PARAMS = {
 # Web form writes that share the comment endpoint's v3 query contract and _rnd.
 _WEB_FORM_WRITES = frozenset({EndpointName.CREATE_COMMENT, EndpointName.POST_LIKE})
 
+# The web chat panel sends private messages with its own UA and a cookie set
+# trimmed to the login cookies only. Mirrored from the web client contract.
+DIRECT_MESSAGE_USER_AGENT = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/125.0.0.0 Safari/537.36"
+)
+LOGIN_COOKIE_NAMES = frozenset(
+    {
+        "user_pkey",
+        "user_heybox_id",
+        "heybox_id",
+        "avatar",
+        "level",
+        "nickname",
+        "x_xhh_tokenid",
+    }
+)
+# Payload hints: the account may only send DMs after App-side verification,
+# or may be temporarily barred from messaging.
+_DIRECT_MESSAGE_VERIFY_HINTS = ("web_auth", "name_verify")
+_DIRECT_MESSAGE_RESTRICTION_HINTS = (
+    "禁止发送消息",
+    "被禁止发消息",
+    "禁止私信",
+    "私信功能已被限制",
+)
+# Chat message type for a plain text DM (images travel in the same call).
+DIRECT_MESSAGE_TYPE_TEXT = "6"
+
 
 class XiaoheiheApiError(RuntimeError):
     def __init__(
@@ -97,6 +131,14 @@ class ResponseContractError(XiaoheiheApiError):
 
 class SendUncertainError(XiaoheiheApiError):
     """A comment request timed out after dispatch and must not be blindly retried."""
+
+
+class DirectMessageRestrictedError(XiaoheiheApiError):
+    """The account is currently barred from sending private messages."""
+
+
+class DirectMessageVerificationRequiredError(XiaoheiheApiError):
+    """Sending DMs requires web/name verification inside the Xiaoheihe app."""
 
 
 def _compact_topic_name(value: object) -> str:
@@ -151,6 +193,10 @@ class XiaoheiheApiClient:
         self.last_error: dict[str, Any] | None = None
         self.last_notification_polls: dict[str, dict[str, Any]] = {}
         self.last_direct_message_probe: dict[str, Any] = {}
+        # Monotonic ack id: the web chat panel deduplicates sends by this value,
+        # so it must only ever grow within one process.
+        self._direct_message_ack_id = int(time.time() * 1000) % 1_000_000_000
+        self._last_direct_message_sent_at = 0.0
         self.consecutive_status: dict[int, int] = {401: 0, 403: 0, 429: 0}
 
     @property
@@ -280,75 +326,164 @@ class XiaoheiheApiClient:
         self.last_notification_polls[event_type.value] = summary
         return parsed
 
+    async def fetch_direct_conversations(self, *, limit: int = 20) -> DirectConversationPage:
+        """Read the private-message conversation list (the unread-aware inbox)."""
+
+        normalized_limit = max(1, min(int(limit), 50))
+        response = await self._request(
+            EndpointName.USER_MESSAGES,
+            params={"list_type": "2", "offset": 0, "limit": normalized_limit},
+        )
+        try:
+            parsed = parse_direct_conversation_page(
+                self.profile_id,
+                response.payload,
+                owner_uid=str(self.credentials.uid if self.credentials else ""),
+                page_size=normalized_limit,
+                source=EndpointName.USER_MESSAGES.value,
+            )
+        except ResponseShapeError as exc:
+            error = ResponseContractError(
+                str(exc),
+                category="response_shape",
+                details=_response_shape_summary(response.payload),
+            )
+            self._remember_error(error)
+            raise error from exc
+        self.last_direct_message_probe = {
+            "source": EndpointName.USER_MESSAGES.value,
+            "conversation_count": len(parsed.items),
+            "has_more": parsed.has_more,
+        }
+        return parsed
+
     async def fetch_direct_messages(
         self,
         *,
-        cursor: str = "",
-        page: int = 1,
-        page_size: int = 20,
-        peer_uid: str = "",
+        peer_uid: str,
+        limit: int = 30,
+        offset: int = 0,
     ) -> DirectMessagePage:
-        """Read private messages using the known read-only route candidates.
+        """Read one conversation's messages.
 
-        The endpoint is intentionally isolated from notification polling. The
-        first route that returns a recognizable message collection wins; no
-        private-message write route is called here.
+        peer_uid is mandatory: the upstream route returns nothing useful
+        without to_user_id. This method only ever reads.
         """
-        normalized_page_size = max(1, min(int(page_size), 50))
-        normalized_page = max(1, int(page))
-        offset = (normalized_page - 1) * normalized_page_size
-        if cursor:
-            try:
-                offset = max(0, int(cursor))
-            except (TypeError, ValueError):
-                offset = (normalized_page - 1) * normalized_page_size
-        base_params: dict[str, Any] = {
-            "offset": offset,
-            "limit": normalized_page_size,
-            "page": normalized_page,
-        }
-        if peer_uid:
-            base_params.update(
-                {
-                    "user_id": str(peer_uid),
-                    "uid": str(peer_uid),
-                    "peer_uid": str(peer_uid),
-                }
-            )
-        errors: list[dict[str, Any]] = []
-        for endpoint_name in (
+
+        peer = str(peer_uid or "").strip()
+        if not peer:
+            raise ValueError("peer_uid 不能为空")
+        normalized_limit = max(1, min(int(limit), 50))
+        response = await self._request(
             EndpointName.DIRECT_MESSAGE_INBOX,
-            EndpointName.DIRECT_MESSAGE_HISTORY,
-        ):
-            try:
-                response = await self._request(endpoint_name, params=dict(base_params))
-                parsed = parse_direct_message_page(
-                    self.profile_id,
-                    response.payload,
-                    owner_uid=str(self.credentials.uid if self.credentials else ""),
-                    conversation_id=f"dm!{peer_uid}" if peer_uid else "",
-                    page_size=normalized_page_size,
-                    source=endpoint_name.value,
-                )
-                self.last_direct_message_probe = {
-                    "source": endpoint_name.value,
-                    "accepted_count": len(parsed.items),
-                    "next_cursor": parsed.next_cursor,
-                    "has_more": parsed.has_more,
-                }
-                return parsed
-            except ResponseShapeError as exc:
-                errors.append({"source": endpoint_name.value, "category": "response_shape", "error": str(exc)})
-                continue
-            except XiaoheiheApiError as exc:
-                errors.append({"source": endpoint_name.value, "category": exc.category, "error": str(exc)[:180]})
-                continue
-        self.last_direct_message_probe = {"source": "none", "errors": errors}
-        raise ResponseContractError(
-            "小黑盒私信读取接口尚未返回可识别的消息结构",
-            category="response_shape",
-            details={"probes": errors},
+            params={
+                "to_user_id": peer,
+                "offset": max(0, int(offset)),
+                "limit": normalized_limit,
+            },
         )
+        try:
+            parsed = parse_direct_message_page(
+                self.profile_id,
+                response.payload,
+                owner_uid=str(self.credentials.uid if self.credentials else ""),
+                conversation_id=f"dm!{peer}",
+                peer_uid=peer,
+                page_size=normalized_limit,
+                source=EndpointName.DIRECT_MESSAGE_INBOX.value,
+            )
+        except ResponseShapeError as exc:
+            error = ResponseContractError(
+                str(exc),
+                category="response_shape",
+                details=_response_shape_summary(response.payload),
+            )
+            self._remember_error(error)
+            raise error from exc
+        self.last_direct_message_probe = {
+            "source": EndpointName.DIRECT_MESSAGE_INBOX.value,
+            "peer_uid": peer,
+            "accepted_count": len(parsed.items),
+        }
+        return parsed
+
+    async def send_direct_message(
+        self,
+        *,
+        peer_uid: str,
+        text: str,
+        image_url: str = "",
+    ) -> DirectMessageSendResult:
+        """Send one private message and return the server acknowledgements.
+
+        A timeout is surfaced as an uncertain send; callers must not retry it.
+        """
+
+        peer = str(peer_uid or "").strip()
+        message_text = str(text or "").strip()
+        image = str(image_url or "").strip()
+        if not peer:
+            raise ValueError("peer_uid 不能为空")
+        if not message_text and not image:
+            raise ValueError("私信内容和图片不能同时为空")
+        self._direct_message_ack_id += 1
+        try:
+            response = await self._request(
+                EndpointName.DIRECT_MESSAGE_SEND,
+                params={"to_user_id": peer},
+                form_body={
+                    "heybox_ack_id": str(self._direct_message_ack_id),
+                    "img": image,
+                    "msg": message_text,
+                    "msg_type": DIRECT_MESSAGE_TYPE_TEXT,
+                },
+                direct_message=True,
+            )
+        except XiaoheiheApiError as exc:
+            classified = self._classify_direct_message_error(exc)
+            if classified is exc:
+                raise
+            raise classified from exc
+        try:
+            result = parse_direct_message_send_result(response.payload)
+        except ResponseShapeError as exc:
+            protocol = unquote(
+                str(_find_first_value(response.payload, "heybox__protocol__execute__directly"))
+            ).casefold()
+            if any(hint in protocol for hint in _DIRECT_MESSAGE_VERIFY_HINTS):
+                error: XiaoheiheApiError = DirectMessageVerificationRequiredError(
+                    "小黑盒要求先在 App 内完成安全认证或实名认证才能发送私信",
+                    category="dm_verification_required",
+                )
+            else:
+                error = ResponseContractError(
+                    "私信发送响应缺少消息确认字段",
+                    category="send_unconfirmed",
+                    details=_response_shape_summary(response.payload),
+                )
+            self._remember_error(error)
+            raise error from exc
+        self._last_direct_message_sent_at = time.time()
+        return result
+
+    @staticmethod
+    def _classify_direct_message_error(error: XiaoheiheApiError) -> XiaoheiheApiError:
+        """Turn upstream texts into the two states the caller must pause on."""
+
+        hint = f"{error.category} {error}".casefold()
+        if any(phrase in hint for phrase in _DIRECT_MESSAGE_RESTRICTION_HINTS):
+            return DirectMessageRestrictedError(
+                str(error) or "小黑盒已禁止当前账号发送私信",
+                status_code=error.status_code,
+                category="dm_restricted",
+            )
+        if any(token in hint for token in _DIRECT_MESSAGE_VERIFY_HINTS):
+            return DirectMessageVerificationRequiredError(
+                "小黑盒要求先在 App 内完成安全认证或实名认证才能发送私信",
+                status_code=error.status_code,
+                category="dm_verification_required",
+            )
+        return error
 
     async def fetch_thread_context(
         self,
@@ -686,6 +821,7 @@ class XiaoheiheApiClient:
         params: dict[str, Any] | None = None,
         json_body: dict[str, Any] | None = None,
         form_body: dict[str, Any] | None = None,
+        direct_message: bool = False,
     ) -> ApiResponse:
         await self.start()
         if self._client is None:
@@ -715,6 +851,11 @@ class XiaoheiheApiClient:
             request_params = dict(params or {})
             for key, value in WEB_CLIENT_PARAMS.items():
                 request_params.setdefault(key, value)
+            if direct_message:
+                # The chat route answers under the heybox app namespace and
+                # does not take the notification-suppression flag.
+                request_params["app"] = "heybox"
+                request_params.pop("_notip", None)
             if self.credentials and self.credentials.uid:
                 request_params.setdefault("heybox_id", self.credentials.uid)
         signed = self._signer.sign(
@@ -732,7 +873,15 @@ class XiaoheiheApiClient:
             )
         headers = dict(signed.headers)
         headers["Referer"] = "https://www.xiaoheihe.cn/"
-        if self.credentials and self.credentials.access_token:
+        if direct_message:
+            # The chat panel presents itself as a browser tab with a trimmed
+            # cookie set; reusing the generic client UA/cookies is rejected.
+            headers["User-Agent"] = DIRECT_MESSAGE_USER_AGENT
+            headers["Accept-Language"] = "zh,zh-CN;q=0.9"
+            cookie_header = self._direct_message_cookie_header()
+            if cookie_header:
+                headers["Cookie"] = cookie_header
+        elif self.credentials and self.credentials.access_token:
             headers["Authorization"] = f"Bearer {self.credentials.access_token}"
         if form_body is not None:
             headers.update(
@@ -763,7 +912,9 @@ class XiaoheiheApiClient:
             except (httpx.TimeoutException, httpx.NetworkError) as exc:
                 if not contract.retry_safe:
                     error = SendUncertainError(
-                        "评论请求超时或连接中断，服务端可能已接收",
+                        "私信发送请求超时或连接中断，服务端可能已接收"
+                        if direct_message
+                        else "评论请求超时或连接中断，服务端可能已接收",
                         category="send_unknown",
                     )
                     self._remember_error(error)
@@ -872,6 +1023,20 @@ class XiaoheiheApiClient:
                 cookies=_cookie_jar_values(self._client, response),
                 headers=response.headers,
             )
+
+    def _direct_message_cookie_header(self) -> str:
+        """Trim the credential jar to the login cookies the chat route accepts."""
+
+        if self.credentials is None:
+            return ""
+        filtered = {
+            str(name): str(value)
+            for name, value in self.credentials.cookies.items()
+            if str(name) in LOGIN_COOKIE_NAMES and str(value)
+        }
+        if not filtered:
+            return ""
+        return "; ".join(f"{name}={value}" for name, value in filtered.items())
 
     def _remember_error(self, error: XiaoheiheApiError) -> None:
         self.last_error = {

@@ -893,6 +893,11 @@ def parse_direct_conversation_page(
     for raw in raw_items:
         if not isinstance(raw, Mapping):
             continue
+        # The message center mixes likes/replies with real chats; only chat
+        # entries carry the private-message conversation.
+        entry = str(raw.get("entry") or "").strip().casefold()
+        if entry and entry not in {"message", "chat", "dm", "chat_message"}:
+            continue
         peer_uid, peer_name = _conversation_peer(raw, owner)
         if not peer_uid or peer_uid == owner or peer_uid in seen:
             continue
@@ -927,12 +932,16 @@ def parse_direct_conversation_page(
 
 
 def parse_direct_message_send_result(payload: Mapping[str, Any]) -> DirectMessageSendResult:
-    """Require all three server acknowledgements before marking a DM sent."""
+    """Require at least one server-side id before marking a DM sent.
+
+    The live response carries heychat_ack_id plus msg_id/msg_seq; older
+    responses omit one of the latter two, so treat any single id as accepted.
+    """
 
     ack = _find_first_scalar(payload, "heychat_ack_id")
     message_id = _find_first_scalar(payload, "msg_id", "message_id", "messageid")
     message_seq = _find_first_scalar(payload, "msg_seq", "message_seq")
-    if not ack or not message_id or not message_seq:
+    if not (ack or message_id or message_seq):
         raise ResponseShapeError("私信发送响应缺少 heychat_ack_id/msg_id/msg_seq")
     return DirectMessageSendResult(
         heychat_ack_id=ack,

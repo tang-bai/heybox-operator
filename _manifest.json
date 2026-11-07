@@ -1,15 +1,15 @@
 {
   "manifest_version": 2,
   "id": "org.orge-8.xiaoheihe-operator",
-  "version": "0.5.0",
+  "version": "0.6.1",
   "name": "小黑盒运营",
   "description": "让 MaiBot 用自己的人设在小黑盒逛帖、点赞、评论和发帖，可联动生活轨迹和配图。",
   "author": {
-    "name": "HannJia",
-    "url": "https://github.com/HannJia"
+    "name": "tang-bai",
+    "url": "https://github.com/tang-bai"
   },
   "urls": {
-    "repository": "https://github.com/HannJia/xiaoheihe-operator"
+    "repository": "https://github.com/tang-bai/heybox-operator"
   },
   "license": "MIT",
   "display": {

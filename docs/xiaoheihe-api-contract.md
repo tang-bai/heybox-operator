@@ -21,6 +21,17 @@
 - 读回：帖子详情里的 `is_award_link` 从 `0` 变成 `1`。
 - 来源：参考 `lumingfei004/dph-heybox` 的抓包记录，不是小黑盒公开文档；每天的点赞数量由 `likes_per_day` 限制。
 
+## 私信发送边界（0.6.0）
+
+- 会话列表：`GET /bbs/app/user/message?list_type=2`，返回和我有私信往来的人。
+- 单会话：`GET /chatroom/v2/msg/user?to_user_id=<对方UID>`，缺 `to_user_id` 时读不到任何会话内容。
+- 发送：`POST /chatroom/v2/msg/user`，查询 `to_user_id`，表单 `heybox_ack_id`、`img`、`msg`、`msg_type=6`。
+- 发送请求使用网页聊天面板的 User-Agent，Cookie 只带登录字段（`user_pkey`、`user_heybox_id`、`heybox_id`、`avatar`、`level`、`nickname`、`x_xhh_tokenid`），不带评论写入用的 v15 `_rnd`。
+- 确认：响应至少包含 `heychat_ack_id` / `msg_id` / `msg_seq` 之一才算发送成功；缺失时记 `send_unknown`，不重发。
+- `heybox_ack_id` 为进程内单调递增的确认号，避免网页端把重复提交当成同一条消息。
+- 限制信号：`禁止发送消息`、`禁止私信`、`私信功能已被限制` 触发 30 分钟暂停；`web_auth` / `name_verify` 协议提示触发 6 小时暂停并要求先在 App 完成认证。
+- 来源：参考 `Whereis-Alice/astrbot_plugin_xhhrobot` 的公开实现交叉核对，本项目独立实现，未复制其代码。
+
 ## 结果与幂等边界
 
 写请求超时、连接中断或响应形状无法确认时记录为 `send_unknown`，不自动重发。真实发送前先把动作标记为 `sending`；重启后只读帖子树核验，不根据未知结果再次写入。通知事件和动作键使用 SQLite 唯一键，已尝试的通知不会重复回复。

@@ -52,6 +52,13 @@ class DirectMessageStore:
                 ON dm_messages(profile_id, created_at DESC, observed_at DESC);
             CREATE INDEX IF NOT EXISTS idx_dm_messages_peer_time
                 ON dm_messages(profile_id, peer_uid, created_at DESC);
+            CREATE TABLE IF NOT EXISTS dm_threads (
+                profile_id TEXT NOT NULL,
+                peer_uid TEXT NOT NULL,
+                marker TEXT NOT NULL DEFAULT '',
+                updated_at REAL NOT NULL,
+                PRIMARY KEY (profile_id, peer_uid)
+            );
             """
         )
         columns = {
@@ -69,6 +76,28 @@ class DirectMessageStore:
             (str(profile_id),),
         ).fetchone()
         return (str(row["cursor"]), bool(row["baseline_ready"])) if row else ("", False)
+
+    def get_thread_marker(self, profile_id: str, peer_uid: str) -> str:
+        """Last inbox marker seen for one peer, so unchanged chats are skipped."""
+
+        row = self._conn.execute(
+            "SELECT marker FROM dm_threads WHERE profile_id=? AND peer_uid=?",
+            (str(profile_id), str(peer_uid)),
+        ).fetchone()
+        return str(row["marker"]) if row else ""
+
+    def set_thread_marker(self, profile_id: str, peer_uid: str, marker: str) -> None:
+        self._conn.execute(
+            """
+            INSERT INTO dm_threads(profile_id, peer_uid, marker, updated_at)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(profile_id, peer_uid) DO UPDATE SET
+              marker=excluded.marker,
+              updated_at=excluded.updated_at
+            """,
+            (str(profile_id), str(peer_uid), str(marker or ""), time.time()),
+        )
+        self._conn.commit()
 
     def set_cursor(self, profile_id: str, cursor: str, *, baseline_ready: bool) -> None:
         self._conn.execute(

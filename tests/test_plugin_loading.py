@@ -66,7 +66,18 @@ def test_plugin_module_loads_with_runner_sdk_surface():
     assert config.automation.post_active_end_time == "22:00"
     assert config.content.generate_post_images is False
     assert config.automation.posts_per_day == 1
-    assert config.post_topic_ids == ["Steam", "PC 游戏"]
+    assert config.dm.dm_enabled is False
+    assert config.dm.dm_mode == "dry_run"
+    assert config.dm.dm_reply_scope == "allowlist"
+    assert config.dm.dm_user_allowlist == []
+    assert config.dm.dm_user_blocklist == []
+    assert config.dm.dm_generate_images is False
+    # 二创把发帖目标拆成「社区」+「话题标签」两个下拉框，默认留空（不自动发帖）。
+    assert config.automation.post_target_primary == ""
+    assert config.automation.post_target_secondary == ""
+    assert config.automation.custom_hashtags == ""
+    assert config.post_topic_ids == []
+    assert config.post_hashtags == []
     assert module._time_window_active("08:00", "23:00", 12 * 3600)
     assert not module._time_window_active("08:00", "23:00", 23 * 3600)
     local_01 = module.time.mktime((2026, 1, 1, 1, 0, 0, 0, 0, -1))

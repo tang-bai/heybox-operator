@@ -29,6 +29,7 @@ class EndpointName(StrEnum):
     TOPIC_FEED = "topic_feed"
     DIRECT_MESSAGE_INBOX = "direct_message_inbox"
     DIRECT_MESSAGE_HISTORY = "direct_message_history"
+    DIRECT_MESSAGE_SEND = "direct_message_send"
     POST_LIKE = "post_like"
 
 
@@ -104,6 +105,11 @@ ENDPOINTS: dict[EndpointName, Endpoint] = {
     ),
     EndpointName.DIRECT_MESSAGE_HISTORY: Endpoint(
         "GET", "/chat/stranger_messages/", True, True
+    ),
+    # Private-message write: the web chat panel posts here with ack-id
+    # deduplication. It must never be retried blindly (timeout = unknown).
+    EndpointName.DIRECT_MESSAGE_SEND: Endpoint(
+        "POST", "/chatroom/v2/msg/user", True, False
     ),
 }
 
