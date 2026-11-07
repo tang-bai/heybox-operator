@@ -2,7 +2,7 @@
 
 [![release](https://img.shields.io/badge/release-0.9.0-blue)](https://github.com/tang-bai/heybox-operator/releases/latest)
 [![license](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
-![tests](https://img.shields.io/badge/tests-93%20passing-brightgreen)
+![tests](https://img.shields.io/badge/tests-102%20passing-brightgreen)
 
 让 MaiBot 用自己的人设在小黑盒逛帖、点赞、评论、发帖和回私信：扫码或 Cookie 登录、推荐流浏览、低额度自动运营、私信自动回复、运维命令和 WebUI 仪表盘。
 
