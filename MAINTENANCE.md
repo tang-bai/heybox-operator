@@ -119,7 +119,7 @@ git revert <commit>       # 生成一个反向提交，保留历史
 发版检查表：
 
 - `_manifest.json` 版本、`CHANGELOG.md` 标题、`git tag`、GitHub Release 四者一致；
-- README 顶部的 `release-x.y.z` 与 `tests-N passing` 都是**静态徽章**（仓库私有，shields.io 动态徽章会显示 no releases or repo not found），发版/加测试时手工改；
+- README 的 release 徽章是 shields.io 动态徽章（仓库已公开，自动跟随最新 Release）；`tests-N passing` 仍是静态数字，加测试时手工改；
 - `cd tests; $env:PYTHONPATH="<插件目录>;<插件目录>\tests"; python -m unittest discover -s . -p "test_*.py"` 全绿；
 - 改过 `webui.json` 或页面后重启 MaiBot，确认工作区能打开两个页签；
 - 给上游提 PR 只需带 `plugin.py`、`vendor_xiaoheihe/`、`tests/` 与根目录新增模块，文档类改动属于维护者自选。

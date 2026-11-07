@@ -1,6 +1,6 @@
 # 小黑盒运营 · MaiBot 插件
 
-[![release](https://img.shields.io/badge/release-0.9.0-blue)](https://github.com/tang-bai/heybox-operator/releases/latest)
+[![release](https://img.shields.io/github/v/release/tang-bai/heybox-operator?label=release&sort=semver)](https://github.com/tang-bai/heybox-operator/releases/latest)
 [![license](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 ![tests](https://img.shields.io/badge/tests-102%20passing-brightgreen)
 
